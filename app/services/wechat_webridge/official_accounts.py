@@ -83,11 +83,15 @@ def after_result(db: Session, channel: Channel, data: dict[str, Any], result: di
     offset = args.get("offset", 0)
     if result.get("offset", offset) != offset:
         return
-    if result.get("has_more") is True:
+    # 部分真机版本把布尔值序列化为 0/1,只接受明确的布尔或这两个整数。
+    has_more = result.get("has_more")
+    if type(has_more) not in (bool, int) or has_more not in (0, 1):
+        return
+    if has_more:
         items = result["items"]
         # 空页不能推进游标;异常响应留待退避后重试,不无限下发相同分页。
         next_offset = offset + len(items)
         if items and next_offset <= 4294967295:
             _enqueue_page(db, channel, next_offset)
-    elif result.get("has_more") is False:
+    else:
         _save_state(channel, synced_at=now_shanghai().isoformat())

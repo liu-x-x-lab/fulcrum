@@ -88,17 +88,18 @@ def test_poll_automatically_requests_all_account_types_with_integer_paging(env):
     assert len(commands(db, channel)) == 1
 
 
-def test_sync_continues_actual_page_length_and_deduplicates_results(env):
+@pytest.mark.parametrize("has_more,finished", [(True, False), (1, 0)])
+def test_sync_continues_actual_page_length_and_deduplicates_results(env, has_more, finished):
     db, channel = env
     first = directory.request_sync(db, channel)
-    response, payload = finish(db, channel, first, [PROFILE], has_more=True, offset=0, total=2)
+    response, payload = finish(db, channel, first, [PROFILE], has_more=has_more, offset=0, total=2)
     assert response["status"] == "completed"
     jobs = commands(db, channel)
     assert len(jobs) == 2 and parse_job_payload(jobs[-1])["command"]["params"]["offset"] == 1
     assert "synced_at" not in service._runtime(channel)[directory.STATE_KEY]
     assert service.accept_command_result(db, channel, payload)["deduplicated"] is True
     assert len(commands(db, channel)) == 2
-    finish(db, channel, jobs[-1], [{**PROFILE, "account_id": "service_b", "account_type": "service"}], offset=1, nested=True)
+    finish(db, channel, jobs[-1], [{**PROFILE, "account_id": "service_b", "account_type": "service"}], offset=1, nested=True, has_more=finished)
     assert "synced_at" in service._runtime(channel)[directory.STATE_KEY]
     assert len(db.scalars(select(WorkWechatContact)).all()) == 2
     assert directory.request_sync(db, channel) is None
