@@ -18,7 +18,7 @@ from app.services.plugin_runtime.replies import file_reply, music_reply, standar
 from app.services.plugin_runtime.state_store import PluginStateStore
 from plugins.music.service import (
     FILE_TYPES, MAX_KEYWORD_LENGTH, MusicApi, MusicConfig, MusicError, PlayableSong, Song,
-    http_url, identifier, inline_text, request_guard,
+    http_url, identifier, inline_text, request_guard, resolve_card_source,
 )
 
 
@@ -36,7 +36,7 @@ FAILURES = {
     "vkey_failed": "这首歌的播放授权暂时获取失败，请稍后再试或选择其他版本。",
     "device": "QQ 音乐限制了当前播放设备，请管理员检查音乐账号的设备状态。",
     "incompatible": "音乐服务响应或接口不兼容，请管理员确认使用 QQMusicApi 0.9.0 Web 服务。",
-    "configuration_error": "音乐配置不正确，请检查 QQMusicApi 服务地址、音质和回复方式。",
+    "configuration_error": "音乐配置不正确，请检查 QQMusicApi 服务地址、音质、回复方式及卡片来源 App ID。",
     "timeout": "音乐请求已超时，请稍后再试。",
     "upstream": "音乐服务暂时不可用，请稍后再试。",
     "pending": "上一条音乐请求还在处理中，请稍等。",
@@ -272,6 +272,7 @@ def _load_config(raw: Mapping[str, Any]) -> MusicConfig:
     on_failure = str(raw.get("on_failure") or "message").strip().lower()
     if file_type not in FILE_TYPES or output_mode not in {"auto", "file", "text"} or on_failure not in {"message", "silent"}:
         raise MusicError("configuration_error", "config")
+    app_id, app_name = resolve_card_source(raw.get("app_id"))
     return MusicConfig(
         api_base=str(raw.get("api_base") or "").strip().rstrip("/"),
         api_key=str(raw.get("api_key") or "").strip(), file_type=file_type,
@@ -281,7 +282,7 @@ def _load_config(raw: Mapping[str, Any]) -> MusicConfig:
         selection_timeout_seconds=_bounded_int(raw.get("selection_timeout_seconds"), 180, 30, 600),
         include_lyrics=str(raw.get("include_lyrics", True)).strip().lower() not in {"false", "0", "no", "off"},
         output_mode=output_mode, on_failure=on_failure,
-        app_id=inline_text(raw.get("app_id")), app_name=inline_text(raw.get("app_name") or "QQ音乐"),
+        app_id=app_id, app_name=app_name,
     )
 
 

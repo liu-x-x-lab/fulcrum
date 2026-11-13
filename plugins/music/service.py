@@ -7,10 +7,13 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Iterator, Mapping
 from urllib.parse import urlencode, urljoin, urlsplit
 
 from app.services.plugin_runtime.http_client import PluginHttpClient, PluginHttpError, PluginHttpTimeoutError
+from app.services.plugin_manifest import parse_manifest
 
 
 # v0.9.0 web/src/modules/song.py publishes integer file_type values, not SDK enum names.
@@ -26,6 +29,7 @@ FILE_TYPES = {
 }
 MAX_KEYWORD_LENGTH = 80
 MAX_LYRIC_LENGTH = 5000
+DEFAULT_CARD_APP_ID = "wx904fb3ecf62c7dea"
 
 
 class MusicError(RuntimeError):
@@ -48,8 +52,8 @@ class MusicConfig:
     include_lyrics: bool = True
     output_mode: str = "auto"
     on_failure: str = "message"
-    app_id: str = ""
-    app_name: str = "QQ音乐"
+    app_id: str = DEFAULT_CARD_APP_ID
+    app_name: str = "汽水音乐"
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,22 @@ class PlayableSong:
 
 def inline_text(value: Any, limit: int = 200) -> str:
     return re.sub(r"\s+", " ", value).strip()[:limit] if isinstance(value, str) else ""
+
+
+@lru_cache(maxsize=1)
+def card_sources() -> tuple[tuple[str, str], ...]:
+    """The manifest is the single catalog used by both the form and runtime."""
+    manifest = parse_manifest(Path(__file__).with_name("config.toml").read_text(encoding="utf-8"))
+    field = next(item for item in manifest["config"]["fields"] if item["key"] == "app_id")
+    return tuple((item["value"], item["label"]) for item in field["options"])
+
+
+def resolve_card_source(app_id: Any) -> tuple[str, str]:
+    value = inline_text(app_id) or DEFAULT_CARD_APP_ID
+    catalog = dict(card_sources())
+    if value.lower() in catalog:
+        return value.lower(), catalog[value.lower()]
+    raise MusicError("configuration_error", "config")
 
 
 def identifier(value: Any) -> str:

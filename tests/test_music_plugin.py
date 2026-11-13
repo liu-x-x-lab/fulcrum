@@ -299,16 +299,67 @@ def test_detail_matches_mid_and_preserves_song_type(music):
 def test_music_reply_and_optional_lyrics(music):
     fake = FakeService()
     with patch.object(music, "PluginHttpClient", return_value=fake):
-        result = music.execute_action(request(config={"app_id": "test-app", "app_name": "音乐来源"}))
+        result = music.execute_action(request(config={"app_id": "wx904fb3ecf62c7dea", "app_name": "音乐来源"}))
     card = result.output["replies"][0]
     assert card["type"] == "music" and card["song_lyric"].startswith("[00:01.00]")
     assert card["song_album_url"].endswith("T002R300x300M000album001.jpg")
-    assert (card["app_id"], card["app_name"]) == ("test-app", "音乐来源")
+    assert (card["app_id"], card["app_name"]) == ("wx904fb3ecf62c7dea", "汽水音乐")
     assert fake.calls[-1][1] == {"song_type": ["0"]}
     assert "do-not-retain" not in json.dumps(result.output)
     fake.routes["/song/song001/lyric"] = PluginHttpTimeoutError("safe-timeout")
     with patch.object(music, "PluginHttpClient", return_value=fake):
         assert music.execute_action(request()).output["replies"][0]["song_lyric"] == ""
+
+
+def test_builtin_card_catalog_is_unique_and_shared_with_form():
+    sources = qqmusic.card_sources()
+    assert len(sources) == len(dict(sources)) == 307
+    assert sources[0] == ("wx904fb3ecf62c7dea", "汽水音乐")
+    fields, errors = read_config_fields(parse_manifest((PROJECT_ROOT / "plugins/music/config.toml").read_text(encoding="utf-8")))
+    assert not errors
+    field = next(item for item in fields if item.key == "app_id")
+    assert field.kind == "select" and field.options == sources
+    assert field.default == qqmusic.DEFAULT_CARD_APP_ID
+    assert "app_name" not in {item.key for item in fields}
+    assert sum(name == "摇一摇" for _key, name in sources) == 2
+
+
+@pytest.mark.parametrize("config, expected", [
+    ({}, ("wx904fb3ecf62c7dea", "汽水音乐")),
+    ({"app_id": "", "app_name": ""}, ("wx904fb3ecf62c7dea", "汽水音乐")),
+    ({"app_id": "wx8dd6ecd81906fd84", "app_name": "QQ音乐"}, ("wx8dd6ecd81906fd84", "网易云音乐")),
+    ({"app_id": "WX79F2C4418704B4F8"}, ("wx79f2c4418704b4f8", "酷狗音乐")),
+    ({"app_id": "wx485a97c844086dc9"}, ("wx485a97c844086dc9", "摇一摇")),
+    ({"app_id": "wx5aa333606550dfd5", "app_name": "其他名称"}, ("wx5aa333606550dfd5", "QQ音乐")),
+])
+def test_music_card_source_is_resolved_without_changing_music_provider(music, config, expected):
+    fake = FakeService()
+    with patch.object(music, "PluginHttpClient", return_value=fake):
+        result = music.execute_action(request(config=config))
+    card = result.output["replies"][0]
+    assert result.ok and (card["app_id"], card["app_name"]) == expected
+    assert all(kwargs["max_redirects"] == 0 for _path, _query, kwargs in fake.calls)
+    assert card["url"].startswith("https://y.qq.com/")
+
+
+@pytest.mark.parametrize("source", ["摇一摇", "酷我音乐", "酷", "wx123", "wx000000000000000g", "wx0000000000000001"])
+def test_incomplete_or_ambiguous_card_source_does_not_call_provider(music, source):
+    with patch.object(music, "PluginHttpClient") as client:
+        result = music.execute_action(request(config={"app_id": source}))
+    assert not result.ok and result.output["provider_status"] == "configuration_error"
+    client.assert_not_called()
+
+
+def test_source_form_only_saves_catalog_ids():
+    from app.services.plugin_schemas import build_plugin_config_view, merge_schema_config
+
+    view = build_plugin_config_view("music", None)
+    assert "app_name" not in {field["name"] for field in view["fields"]}
+    for value in ("wx0000000000000001", "汽水音乐", "search text"):
+        merged = merge_schema_config("music", {"schema__app_id": value})
+        assert json.loads(merged.config_json)["app_id"] == qqmusic.DEFAULT_CARD_APP_ID
+    merged = merge_schema_config("music", {"schema__app_id": "wx8dd6ecd81906fd84"})
+    assert json.loads(merged.config_json)["app_id"] == "wx8dd6ecd81906fd84"
 
 
 def test_lyrics_are_bounded_and_cover_falls_back_to_singer(music):
