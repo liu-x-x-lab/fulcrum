@@ -267,6 +267,36 @@ def test_card_embeds_local_assets_and_escapes_nickname(sign_module):
     assert 'http:' not in markup and 'https:' not in markup and 'file:' not in markup
 
 
+def test_card_reuses_original_upstream_layout_and_repeat_status(sign_module, monkeypatch):
+    module = sign_module._fortune_module
+    current = now_shanghai().replace(hour=8)
+    monkeypatch.setattr(module, "now_shanghai", lambda: current)
+    fortune = sign_module.daily_fortune(1, "room", "user", current)
+    view = {
+        "fortune": fortune, "level": sign_module.level_info(750),
+        "username": "本群昵称", "provider_status": "signed",
+        "points_awarded": 4, "exp_awarded": 20, "total_exp": 750,
+        "points": 100,
+    }
+    markup = module.build_card_html(view)
+    assert '<div class="container">' in markup
+    assert 'height: 389px' in markup and 'margin-top: -48px' in markup
+    assert 'class="dateInfo"' in markup and 'backdrop-filter: blur(6px)' in markup
+    assert 'class="levelInfo"' in markup and 'height: 29px' in markup
+    assert 'class="toDoBg"' in markup and 'background-color:#D94A3F' in markup
+    assert '本群昵称<br>' in markup and '早上好' in markup
+    assert current.strftime('%m/%d') in markup and '750/1000' in markup
+    assert '签到成功！' in markup and '+20' in markup and '+4' in markup
+    assert markup.count('data:image/svg+xml;base64,') == 4
+    assert markup.index('class="hitokoto"') < markup.index('class="content"')
+    assert '随机生成 请勿迷信 | AstrBot' in markup
+    repeated = module.build_card_html({**view, "provider_status": "already_signed"})
+    assert '今天已经签到过了哦' in repeated and '累计 积分 100' in repeated
+    repeated_signin = repeated.split('<div class="signin">', 1)[1].split('</div>', 1)[0]
+    assert '+20' not in repeated_signin and '+4' not in repeated_signin
+    assert repeated.count('data:image/svg+xml;base64,') == 2
+
+
 def synced_member(db, identity, *, group="sign-room", sender="fortune-user", display="本群群昵称", nickname="成员昵称", avatar="https://example.com/member.png"):
     room = Chatroom(tenant_id=identity["tenant_id"], bot_id=identity["bot_id"],
                     channel_id=identity["channel_id"], external_id=group, name="测试群")

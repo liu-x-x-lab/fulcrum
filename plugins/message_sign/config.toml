@@ -2,7 +2,7 @@
 code = "message_sign"
 display_name = "群签到"
 plugin_type = "command"
-version = "2.1.0"
+version = "2.1.1"
 author = "abot"
 description = "群聊运势签到卡片、每日宜忌、经验等级、连续签到积分、当日排名和昨天补签。"
 default_enabled = false

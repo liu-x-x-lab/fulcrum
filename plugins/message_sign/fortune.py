@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 from PIL import Image
 
+from app.core.time import now_shanghai
 from app.services.plugin_runtime.http_client import PluginHttpClient
 from app.services.safe_fetch import open_public_url
 
@@ -97,9 +98,9 @@ def level_info(total_exp: int) -> dict[str, Any]:
     }
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=7)
 def _asset_uri(filename: str) -> str:
-    mime = {".jpg": "image/jpeg", ".png": "image/png", ".woff2": "font/woff2"}[Path(filename).suffix]
+    mime = {".jpg": "image/jpeg", ".png": "image/png", ".woff2": "font/woff2", ".svg": "image/svg+xml"}[Path(filename).suffix]
     encoded = base64.b64encode((ASSETS / filename).read_bytes()).decode("ascii")
     return f"data:{mime};base64,{encoded}"
 
@@ -171,68 +172,143 @@ def _background_data_uri(url: str) -> str:
         return _asset_uri("default_background.jpg")
 
 
+def _get_greeting(hour: int) -> str:
+    if 0 <= hour < 5:
+        return "晚安"
+    if 5 <= hour < 9:
+        return "早上好"
+    if 9 <= hour < 11:
+        return "上午好"
+    if 11 <= hour < 14:
+        return "中午好"
+    if 14 <= hour < 18:
+        return "下午好"
+    if 18 <= hour < 20:
+        return "傍晚好"
+    return "晚上好"
+
+
+def _emoji_svg(codepoint: str) -> str:
+    return f'<img class="icon" src="{_asset_uri(f"emoji_{codepoint}.svg")}" alt="">'
+
+
 def build_card_html(view: Mapping[str, Any]) -> str:
-    """Embed all assets and escape user text; rendering never needs network access."""
-    esc = lambda value: html.escape(str(value), quote=True)
+    """Reuse upstream's original template; adapt only platform data and asset URIs."""
+    escape = lambda value: html.escape(str(value), quote=True)
     fortune, level = view["fortune"], view["level"]
-    avatar_uri = str(view.get("avatar_data_uri") or _asset_uri("default_avatar.png"))
-    background_uri = str(view.get("background_data_uri") or _asset_uri("default_background.jpg"))
-    good = "".join(f"<p>{esc(e['name'])}<span>{esc(e['text'])}</span></p>" for e in fortune["good_events"])
-    bad = "".join(f"<p>{esc(e['name'])}<span>{esc(e['text'])}</span></p>" for e in fortune["bad_events"])
-    success = view["provider_status"] == "signed"
-    status = "签到成功！" if success else "今天已经签过到了"
-    reward = f"积分 +{int(view['points_awarded'])} · 经验 +{int(view['exp_awarded'])}" if success else "今日奖励已领取"
-    exp_text = f"{int(view['total_exp'])} / {level['next_exp']} EXP" if level["next_exp"] is not None else f"{int(view['total_exp'])} EXP · 已满级"
-    rank = f" · 今日第 {int(view['todays_rank'])} 位" if view.get("todays_rank") else ""
-    return f"""<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'">
+    current = now_shanghai()
+    # Upstream's image omits its username field. Keep the synced group nickname
+    # in the existing two-line quote area without introducing another panel.
+    hitokoto = f'{escape(view["username"])}<br>{escape(fortune["hitokoto"])}'
+    view = {
+        "signed_today": view["provider_status"] != "signed",
+        "exp_gain": int(view["exp_awarded"]),
+        "coin_gain": int(view["points_awarded"]),
+        "total_coin": int(view["points"]),
+        "good_events": [{"name": item["name"], "good": item["text"]} for item in fortune["good_events"]],
+        "bad_events": [{"name": item["name"], "bad": item["text"]} for item in fortune["bad_events"]],
+        "hitokoto": hitokoto,
+        "background": view.get("background_data_uri") or _asset_uri("default_background.jpg"),
+        "avatar": view.get("avatar_data_uri") or _asset_uri("default_avatar.png"),
+        "greeting": _get_greeting(current.hour),
+        "date": datetime.fromisoformat(fortune["date"]).strftime("%m/%d"),
+        "level": {"levelName": level["name"], "levelColor": level["color"]},
+        "exp_text": f'{int(view["total_exp"])}/{level["next_exp"] if level["next_exp"] is not None else "???"}',
+        "progress": f'{float(level["progress"]):.3f}',
+        "luck": int(fortune["luck"]),
+        "fortune_desc": fortune["description"],
+    }
+    status = "今天已经签到过了哦" if view["signed_today"] else "签到成功！"
+    emoji_jelly = f'<img class="icon" src="{_asset_uri("emoji_1fae7.svg")}" alt="">'
+    emoji_coin = f'<img class="icon" src="{_asset_uri("emoji_1fa99.svg")}" alt="">'
+    reward = (
+        f"{emoji_jelly}+{view['exp_gain']} {emoji_coin}+{view['coin_gain']}"
+        if not view["signed_today"]
+        else f"累计 {escape('积分')} {view['total_coin']}"
+    )
+    gooddo = "<br>".join(
+        f"{escape(item['name'])}——{escape(item['good'])}"
+        for item in view["good_events"]
+    )
+    baddo = "<br>".join(
+        f"{escape(item['name'])}——{escape(item['bad'])}"
+        for item in view["bad_events"]
+    )
+    # 昵称和一言已由上面的适配层转义，此处只保留受控的 <br>。
+    hitokoto = view["hitokoto"]
+    background = escape(view["background"])
+    avatar = escape(view["avatar"])
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">
+<title>运势签到</title>
 <style>
-@font-face {{font-family:card;src:url('{_asset_uri('osans4.subset.woff2')}') format('woff2')}}
-* {{box-sizing:border-box}}
-html,body {{margin:0;padding:0;width:600px;background:#fff}}
-body {{font-family:'Microsoft YaHei','Noto Sans CJK SC',card,sans-serif;color:#242933}}
-.card {{width:600px;overflow:hidden;background:#fff}}
-.hero {{width:600px;height:310px;display:block;object-fit:cover}}
-.header {{position:relative;margin:-44px 26px 0;display:flex;gap:16px;align-items:center}}
-.avatar {{width:84px;height:84px;border:4px solid #fff;border-radius:18px;object-fit:cover}}
-.identity {{background:rgba(255,255,255,.95);border-radius:14px;padding:12px 18px;flex:1;min-width:0}}
-.name {{font-size:25px;font-weight:bold;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}}
-.date {{font-size:15px;color:#707987;margin-top:3px}}
-.content {{padding:18px 30px 8px}}
-.status {{font-size:23px;font-weight:bold}}
-.reward {{font-size:18px;color:#8b6541;margin-top:5px}}
-.stats {{font-size:16px;color:#737c89;margin:12px 0;line-height:1.7}}
-.level {{display:flex;justify-content:space-between;align-items:baseline;gap:12px}}
-.level strong {{font-size:23px;color:{esc(level['color'])}}}
-.level small {{font-size:15px;color:#8a929d}}
-.track {{margin-top:9px;background:#edf0f4;height:12px;border-radius:6px;overflow:hidden}}
-.progress {{height:100%;width:{float(level['progress']):.3f}%;background:#8a9bba}}
-.fortune {{display:flex;gap:18px;align-items:center;margin:18px 0 12px}}
-.luck {{font-size:49px;font-weight:bold;color:#47624f;line-height:1.1}}
-.fortune small {{font-size:14px;color:#8a929d}}
-.description {{font-size:20px;line-height:1.45;flex:1;min-width:0;overflow-wrap:anywhere}}
-.events {{border-top:1px solid #e9ebef;padding-top:12px}}
-.row {{display:flex;gap:14px;align-items:center;margin-bottom:14px}}
-.badge {{width:42px;height:42px;flex-shrink:0;border-radius:50%;color:#fff;font-size:26px;display:flex;align-items:center;justify-content:center}}
-.good {{background:#b75a4c}} .bad {{background:#566477}}
-.items {{flex:1;min-width:0}} p {{margin:5px 0;font-size:17px;line-height:1.5;overflow-wrap:anywhere}}
-p span {{color:#7b828c;font-size:15px;margin-left:10px}}
-.quote {{text-align:center;font-size:15px;color:#8b929c;line-height:1.6;padding:0 30px 12px}}
-.credit {{font-size:12px;color:#a0a6af;text-align:center;padding:0 15px 16px}}
-</style></head><body><main class="card">
-<img class="hero" src="{esc(background_uri)}" alt="">
-<div class="header"><img class="avatar" src="{esc(avatar_uri)}" alt="">
-<div class="identity"><div class="name">{esc(view['username'])}</div><div class="date">{esc(fortune['date'])} · 今日运势签到</div></div></div>
-<div class="content"><div class="status">{status}</div><div class="reward">{reward}{rank}</div>
-<div class="stats">连续 {int(view['signin_streak'])} 天 · 累计 {int(view['total_sign_count'])} 次 · 当前积分 {int(view['points'])}</div>
-<div class="level"><strong>Lv.{int(level['level'])} {esc(level['name'])}</strong><small>{esc(exp_text)}</small></div>
-<div class="track"><div class="progress"></div></div>
-<div class="fortune"><div><div class="luck">{int(fortune['luck'])}</div><small>今日幸运值</small></div><div class="description">{esc(fortune['description'])}</div></div>
-<div class="events"><div class="row"><div class="badge good">宜</div><div class="items">{good}</div></div>
-<div class="row"><div class="badge bad">忌</div><div class="items">{bad}</div></div></div></div>
-<div class="quote">{esc(fortune['hitokoto'])}</div><footer class="credit">随机生成，仅供娱乐 · Fulcrum</footer>
-</main></body></html>"""
+@font-face {{ font-family: 'osans4'; src: url("{_asset_uri("osans4.subset.woff2")}") format("woff2"); }}
+* {{ box-sizing: border-box; }}
+html, body {{ margin: 0; padding: 0; background: transparent; }}
+body {{ width: 600px; font-family: 'Noto Sans SC', 'Noto Sans CJK SC', osans4, 'WenQuanYi Zen Hei', 'Microsoft YaHei', Arial, sans-serif; }}
+.container {{ width: 600px; background: #fff; overflow: hidden; }}
+.hero {{ width: 600px; height: 389px; object-fit: cover; display: block; }}
+.header {{ display: flex; flex-direction: row; justify-content: space-between; margin-left: 24px; margin-right: 40px; margin-top: -48px; position: relative; z-index: 2; }}
+.avatar {{ width: 80px; height: 80px; object-fit: cover; border-radius: 10px; border: 3px solid #fff; }}
+.dateInfo {{ height: 83px; width: 430px; border-radius: 10px; background: rgba(255,255,255,0.45); box-shadow: 0 0 5px #a7a7a7; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: flex; flex-direction: row; justify-content: space-between; align-items: center; font-size: 60px; font-weight: 700; line-height: 1; }}
+.dateInfo span {{ margin-left: 16px; margin-right: 16px; white-space: nowrap; }}
+.dateInfo .date {{ color: #666; }}
+.hitokoto {{ color: #838383; font-size: 16px; line-height: 1.45; text-align: center; padding-top: 18px; min-height: 72px; }}
+.content {{ padding: 0 30px; }}
+.signin {{ color: #838383; margin-top: 0; margin-bottom: 8px; font-size: 20px; font-weight: 600; }}
+.icon {{ width: 1.2em; height: 1.2em; vertical-align: -0.2em; display: inline-block; }}
+.levelInfo {{ display: flex; flex-direction: row; justify-content: space-between; font-size: 30px; font-weight: 800; line-height: 1.18; white-space: nowrap; align-items: baseline; color: #000; }}
+.levelInfo .exp {{ color: #b4b1b1; }}
+.level-bar {{ margin-top: 2px; display: flex; align-items: center; }}
+.bar-container {{ width: 100%; background: #e0e0e0; border-radius: 5px; overflow: hidden; }}
+.progress {{ width: {view["progress"]}%; background: #666; padding: 5px 0; border-radius: 5px 0 0 5px; height: 29px; }}
+.fortune {{ display: flex; flex-direction: row; justify-content: space-between; align-items: center; margin-top: 10px; margin-right: 5px; }}
+.fortune .luck {{ font-size: 36px; font-weight: 800; color: #000; }}
+.fortune .desc {{ font-size: 28px; color: #838383; white-space: nowrap; font-weight: 600; }}
+hr {{ border: 0; border-top: 1px solid #bcbcbc; margin: 10px 0 0; }}
+.toDo {{ display: flex; flex-direction: row; margin-top: 18px; align-items: center; }}
+.toDo p {{ margin: 0 0 0 20px; font-size: 20px; line-height: 1.28; font-weight: 600; }}
+.goodText {{ color: #4b3732; text-shadow: 0 0 1px #ffbbbb; }}
+.badText {{ color: #343a43; text-shadow: 0 0 1px #bcdbff; }}
+.toDoBg {{ border-radius: 50%; width: 48px; height: 48px; min-width: 48px; display: flex; justify-content: center; align-items: center; }}
+.toDoBg span {{ font-size: 32px; font-weight: 800; color: #fff; line-height: 1; }}
+.credit {{ margin-top: 4px; text-align: center; color: #999; font-size: 12px; padding: 8px 10px 10px; }}
+</style>
+</head>
+<body id="body">
+  <div class="container">
+<img class="hero" src="{background}" alt="background">
+<div class="header">
+  <img class="avatar" src="{avatar}" alt="avatar">
+  <div class="dateInfo">
+    <span>{escape(view["greeting"])}</span>
+    <span class="date">{escape(view["date"])}</span>
+  </div>
+</div>
+<div class="hitokoto">{hitokoto}</div>
+<div class="content">
+  <div class="signin">{status} {reward}</div>
+  <div class="levelInfo">
+    <span style="color:{view["level"]["levelColor"]}">{escape(view["level"]["levelName"])}</span>
+    <span class="exp">{escape(view["exp_text"])}</span>
+  </div>
+  <div class="level-bar"><div class="bar-container"><div class="progress"></div></div></div>
+  <div class="fortune">
+    <span class="luck">{_emoji_svg("1f340")} {escape(view["luck"])}</span>
+    <span class="desc">{_emoji_svg("1f320")} {escape(view["fortune_desc"])}</span>
+  </div>
+  <hr>
+  <div class="toDo"><div class="toDoBg" style="background-color:#D94A3F;"><span>宜</span></div><p class="goodText">{gooddo}</p></div>
+  <div class="toDo"><div class="toDoBg" style="background-color:#000;"><span>忌</span></div><p class="badText">{baddo}</p></div>
+</div>
+<div class="credit">随机生成 请勿迷信 | AstrBot</div>
+  </div>
+</body>
+</html>"""
 
 
 def _browser_path() -> str | None:
@@ -260,7 +336,7 @@ async def _render_png(html_content: str) -> bytes:
             await page.route("**/*", lambda route: route.abort())
             await page.set_content(html_content, wait_until="load", timeout=2500)
             await page.evaluate("async () => { await document.fonts.ready; await Promise.all(Array.from(document.images, i => i.decode())); }")
-            return await page.locator(".card").screenshot(type="png", animations="disabled", timeout=2000)
+            return await page.locator(".container").screenshot(type="png", animations="disabled", timeout=2000)
         finally:
             await browser.close()
 

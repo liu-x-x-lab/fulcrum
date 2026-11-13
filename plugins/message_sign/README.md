@@ -46,6 +46,8 @@ Windows 自动查找本机 Chrome/Edge；Linux 自动查找系统 Chromium/Chrom
 
 ## 上游来源与许可
 
-运势描述、宜忌词库、等级表、默认背景、默认头像和字体来自 [fiatlux2333/astrbot_plugin_jrys](https://github.com/fiatlux2333/astrbot_plugin_jrys)，参考版本 1.3.7，提交 9efe04c5dc763cfe0853907f015ffb0249d824e5。
+运势描述、宜忌词库、等级表、默认背景、默认头像、字体及卡片模板来自 [fiatlux2333/astrbot_plugin_jrys](https://github.com/fiatlux2333/astrbot_plugin_jrys)，参考版本 1.3.7，提交 9efe04c5dc763cfe0853907f015ffb0249d824e5。
 
-运势与等级玩法根据 Fulcrum 的数据库、租户隔离和统一积分体系适配；HTML 卡片重新实现，未引入 AstrBot 运行时、用户 JSON 文件或其独立货币存储。上游 MIT 许可及原版权声明保存在 LICENSE.upstream。
+运势与等级玩法根据 Fulcrum 的数据库、租户隔离和统一积分体系适配；HTML/CSS 卡片直接复用上游原始模板，仅适配现有签到数据、群资料和内嵌资源地址；群昵称放在原模板的一言区域，未引入 AstrBot 运行时、用户 JSON 文件或其独立货币存储。上游 MIT 许可及原版权声明保存在 LICENSE.upstream。
+
+卡片中的四个 SVG 图标沿用上游随附的 Twemoji 图形，采用 CC-BY 4.0；版权与许可见 assets/LICENSE.twemoji。
