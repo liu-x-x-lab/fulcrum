@@ -2,9 +2,9 @@
 code = "music"
 display_name = "音乐点播"
 plugin_type = "command"
-version = "2.0.0"
+version = "3.0.0"
 author = "abot"
-description = "搜索歌曲并返回跨渠道可播放文件"
+description = "基于 QQMusicApi 0.9.0 Web 的点歌、搜歌选歌与歌词查询"
 default_enabled = false
 
 [capability]
@@ -16,7 +16,7 @@ consume_policy = "continue"
 timeout_ms = 30000
 
 [matcher]
-commands = ["点歌", "音乐", "音乐点播", "点播音乐", "音乐点歌"]
+commands = ["点歌", "音乐", "音乐点播", "点播音乐", "音乐点歌", "搜歌", "选歌", "歌词"]
 require_mention = false
 
 [secrets]
@@ -25,5 +25,146 @@ fields = ["api_key"]
 [runtime]
 api_base = ""
 api_key = ""
-quality = "exhigh"
-timeout_seconds = 15
+file_type = "mp3_128"
+timeout_seconds = 25
+request_timeout_seconds = 8
+result_limit = 5
+selection_timeout_seconds = 180
+include_lyrics = true
+output_mode = "auto"
+on_failure = "message"
+app_id = ""
+app_name = "QQ音乐"
+
+[[config.fields]]
+key = "api_base"
+label = "QQMusicApi 服务地址"
+kind = "url"
+default = ""
+placeholder = "https://music.example.com"
+hint = "填写 QQMusicApi 0.9.0 Web 服务根地址，不带接口路径。旧 /Search、/Song_V1 服务不兼容；QQ 账号登录在该服务端管理。"
+group = "接口"
+
+[[config.fields]]
+key = "api_key"
+label = "反向代理密钥（可选）"
+kind = "secret"
+hint = "仅当反向代理要求 Bearer 授权时填写；不是 QQ 登录凭证。加密保存，留空保持原值。"
+group = "接口"
+
+[[config.fields]]
+key = "file_type"
+label = "音质与格式"
+kind = "select"
+default = "mp3_128"
+options = [
+  { value = "mp3_128", label = "MP3 128k（兼容优先）" },
+  { value = "mp3_320", label = "MP3 320k" },
+  { value = "flac", label = "FLAC 无损" },
+  { value = "ogg_192", label = "OGG 192k" },
+  { value = "ogg_320", label = "OGG 320k" },
+  { value = "aac_96", label = "AAC 96k / M4A" },
+  { value = "aac_192", label = "AAC 192k / M4A" },
+]
+hint = "高音质可能需要会员或单曲购买。插件不会自动换歌或降级音质；播放兼容性取决于接收端。"
+group = "点播"
+
+[[config.fields]]
+key = "output_mode"
+label = "回复方式"
+kind = "select"
+default = "auto"
+options = [
+  { value = "auto", label = "自动（微桥音乐卡片，其他渠道文本链接）" },
+  { value = "file", label = "文件（Telegram 使用文本链接）" },
+  { value = "text", label = "文本链接" },
+]
+hint = "微桥卡片通过现有手机命令发送，最终发送状态以手机回报为准。播放地址可能过期，需重新点歌。"
+group = "点播"
+
+[[config.fields]]
+key = "include_lyrics"
+label = "音乐卡片附带歌词"
+kind = "bool"
+default = true
+hint = "歌词获取失败仍可发送歌曲；关闭后不影响独立的“歌词 歌名”命令。文件或文本回复不附带歌词。"
+group = "点播"
+
+[[config.fields]]
+key = "result_limit"
+label = "搜索候选数量"
+kind = "number"
+default = 5
+min = 1
+max = 10
+hint = "“搜歌”显示的数量，也是“点歌 歌名 -n 序号”可选的范围。"
+group = "搜索与选歌"
+
+[[config.fields]]
+key = "selection_timeout_seconds"
+label = "选歌列表有效期（秒）"
+kind = "number"
+default = 180
+min = 30
+max = 600
+hint = "按租户、机器人绑定、渠道、会话、发送者及微桥登录会话隔离；只保存歌曲元数据。"
+group = "搜索与选歌"
+
+[[config.fields]]
+key = "timeout_seconds"
+label = "整次点歌超时（秒）"
+kind = "number"
+default = 25
+min = 5
+max = 25
+hint = "搜索、详情、播放地址和可选歌词共用此时限，保留时间给平台出站处理。"
+group = "请求控制"
+
+[[config.fields]]
+key = "request_timeout_seconds"
+label = "单次接口超时（秒）"
+kind = "number"
+default = 8
+min = 1
+max = 15
+hint = "每个 HTTP 请求最多等待多久，且不能超过整次点歌的剩余时间；不自动重试。"
+group = "请求控制"
+
+[[config.fields]]
+key = "on_failure"
+label = "接口失败时"
+kind = "select"
+default = "message"
+options = [{ value = "message", label = "返回原因提示" }, { value = "silent", label = "静默" }]
+hint = "区分登录失效、权限不足、限流、接口不兼容和超时；静默模式仍记录安全的错误分类。"
+group = "请求控制"
+
+[[config.fields]]
+key = "app_id"
+label = "卡片来源 App ID（可选）"
+kind = "text"
+default = ""
+hint = "仅用于微桥原生音乐卡片；按接入端要求填写。"
+group = "卡片来源"
+
+[[config.fields]]
+key = "app_name"
+label = "卡片来源名称"
+kind = "text"
+default = "QQ音乐"
+group = "卡片来源"
+
+[[config.fields]]
+key = "commands"
+label = "触发命令"
+kind = "tags"
+default = ["点歌", "音乐", "音乐点播", "点播音乐", "音乐点歌", "搜歌", "选歌", "歌词"]
+hint = "多个用逗号分隔。新增别名按点歌处理；搜歌、选歌、歌词请保留原命令名。"
+group = "触发方式"
+
+[[config.fields]]
+key = "require_mention"
+label = "群里必须 @ 机器人才响应"
+kind = "bool"
+default = false
+group = "触发方式"
