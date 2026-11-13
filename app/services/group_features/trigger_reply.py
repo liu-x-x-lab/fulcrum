@@ -12,6 +12,7 @@ from typing import Any
 from app.services.group_features.dispatch import FeatureContext, register_handler
 from app.services.group_features.member_change import parse_member_change
 from app.services.group_features.registry import GroupFeature, register
+from app.services.plugin_runtime.member_names import member_names
 from app.services.trigger_rules.catalog import EventView, trigger_event_types
 from app.services.trigger_rules.engine import execute_rules
 
@@ -23,6 +24,21 @@ FEATURE = register(
         event_types=trigger_event_types(),
     )
 )
+
+
+def _display_names(ctx: FeatureContext, user_ids: list[str]) -> dict[str, str]:
+    """把事件里出现的用户 ID 换成本群显示名(群昵称优先);查不到的不放进结果,调用方自行兜底。"""
+
+    ids = [item for item in dict.fromkeys(user_ids) if item]
+    if not ids:
+        return {}
+    resolved = member_names(ctx.db, channel_id=int(ctx.channel.id), group_external_id=str(ctx.chatroom.external_id), user_ids=ids)
+    return {user_id: name for user_id, name in resolved.items() if name and name != user_id}
+
+
+def _pat_ids(details: Any) -> list[str]:
+    pat = details.get("pat") if isinstance(details, dict) else None
+    return [str(pat.get("from_id") or ""), str(pat.get("patted_id") or "")] if isinstance(pat, dict) else []
 
 
 def handle(ctx: FeatureContext, args: str) -> list[dict[str, Any]] | None:
@@ -38,6 +54,7 @@ def handle(ctx: FeatureContext, args: str) -> list[dict[str, Any]] | None:
         details=ctx.details,
         # 入群/退群/改群昵称:复用成员变更提醒已有的解析(结构化事件和系统消息文字都认)
         member_change=parse_member_change(ctx.normalized_event),
+        names=_display_names(ctx, _pat_ids(ctx.details)),
     )
     return execute_rules(ctx.db, tenant_id=int(ctx.channel.tenant_id), chatroom_id=int(ctx.chatroom.id), view=view)
 
