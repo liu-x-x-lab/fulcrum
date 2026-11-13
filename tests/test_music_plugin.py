@@ -151,11 +151,88 @@ def test_rejects_legacy_and_malformed_response(music, payload):
     (404, {}, "incompatible"), (504, {}, "timeout"), (500, {}, "upstream"),
 ])
 def test_classifies_http_errors_without_retry(music, status, headers, kind):
-    fake = FakeService(routes={"/search/search_by_type": PluginHttpResponse(status, headers, b'{}', "https://music.example.test")})
+    response = PluginHttpResponse(status, headers, b'{}', "https://music.example.test")
+    fake = FakeService(routes={"/search/search_by_type": response, "/search/quick_search": response})
     with patch.object(music, "PluginHttpClient", return_value=fake):
         result = music.execute_action(request(config={"on_failure": "silent"}))
     assert not result.ok and result.output["provider_status"] == kind
     assert result.output["http_status"] == status and result.output["replies"] == []
+    assert len(fake.calls) == (2 if kind == "limited" else 1)
+
+
+def test_limited_search_uses_quick_search_and_matching_detail(music):
+    fake = FakeService(routes={
+        "/search/search_by_type": PluginHttpResponse(429, {}, b'{}', "https://music.example.test"),
+        "/search/quick_search": {"code": 0, "data": {"song": {"itemlist": [
+            {"mid": "song001", "name": "晴天", "singer": "歌手", "pic": "https://untrusted.test/cover"},
+        ]}}},
+        "/song/query_song": {"code": 0, "data": {"tracks": [song("other"), song()]}},
+    })
+    with patch.object(music, "PluginHttpClient", return_value=fake):
+        result = music.execute_action(request())
+    assert result.ok
+    assert [call[0] for call in fake.calls] == ["/search/search_by_type", "/search/quick_search",
+        "/song/query_song", "/song/song001/url", "/song/song001/lyric"]
+    assert fake.calls[1][1] == {"keyword": ["晴天"]}
+    assert fake.calls[2][1] == {"value": ["song001"]}
+    card = result.output["replies"][0]
+    assert card["song_album_url"].endswith("T002R300x300M000album001.jpg")
+    assert "untrusted.test" not in json.dumps(result.output)
+    fake.calls.clear()
+    fake.routes["/song/query_song"]["data"]["tracks"] = [song("other")]
+    with patch.object(music, "PluginHttpClient", return_value=fake):
+        result = music.execute_action(request())
+    assert not result.ok and result.output["failure_stage"] == "detail"
+    assert len(fake.calls) == 3
+
+
+@pytest.mark.parametrize("category", [None, [], {"itemlist": {}}])
+def test_quick_search_requires_standard_category(category):
+    fake = FakeService(routes={
+        "/search/search_by_type": PluginHttpResponse(429, {}, b'{}', "https://music.example.test"),
+        "/search/quick_search": {"code": 0, "data": {"song": category}},
+    })
+    with pytest.raises(MusicError) as error:
+        MusicApi(MusicConfig(api_base="https://music.example.test"), fake).search("晴天")
+    assert (error.value.kind, error.value.stage) == ("incompatible", "quick_search")
+    assert len(fake.calls) == 2
+
+
+@pytest.mark.parametrize("status,kind", [(429, "limited"), (500, "upstream")])
+def test_quick_search_failure_stops_after_one_alternate(status, kind):
+    fake = FakeService(routes={
+        "/search/search_by_type": PluginHttpResponse(429, {}, b'{}', "https://music.example.test"),
+        "/search/quick_search": PluginHttpResponse(status, {}, b'{}', "https://music.example.test"),
+    })
+    with pytest.raises(MusicError) as error:
+        MusicApi(MusicConfig(api_base="https://music.example.test"), fake).search("晴天")
+    assert (error.value.kind, error.value.stage) == (kind, "quick_search")
+    assert len(fake.calls) == 2
+
+
+def test_quick_search_filters_duplicates_and_bounds_results():
+    fake = FakeService(routes={
+        "/search/search_by_type": PluginHttpResponse(429, {}, b'{}', "https://music.example.test"),
+        "/search/quick_search": {"code": 0, "data": {"song": {"itemlist": [None,
+            {"mid": "bad/mid", "name": "无效"}, {"mid": "song001", "name": "晴天", "singer": "歌手"},
+            {"mid": "song001", "name": "重复"}, {"mid": "song002", "name": "第二首"},
+        ]}}},
+    })
+    songs = MusicApi(MusicConfig(api_base="https://music.example.test", result_limit=1), fake).search("晴天")
+    assert songs == [Song("song001", "晴天", singer="歌手", needs_detail=True)]
+
+
+def test_quick_search_cannot_extend_total_deadline():
+    with patch.object(qqmusic.time, "monotonic", return_value=100) as timer:
+        def finish_budget(path):
+            timer.return_value = 124.95
+        fake = FakeService(on_request=finish_budget, routes={
+            "/search/search_by_type": PluginHttpResponse(429, {}, b'{}', "https://music.example.test"),
+        })
+        api = MusicApi(MusicConfig(api_base="https://music.example.test"), fake)
+        with pytest.raises(MusicError) as error:
+            api.search("晴天")
+    assert (error.value.kind, error.value.stage) == ("timeout", "quick_search")
     assert len(fake.calls) == 1
 
 

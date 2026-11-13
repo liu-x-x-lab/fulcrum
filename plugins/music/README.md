@@ -42,6 +42,7 @@ api = { song = ["get_song_urls", "get_song_url"] }
 - 文本：返回歌曲页面及播放链接。签名播放地址可能过期，过期后重新点歌。
 - 音乐卡片可附带最多 5000 字符的歌词。歌词属于可选信息，获取失败仍发送已授权歌曲。文件、文本模式不额外获取歌词；独立歌词命令始终可用。
 - 登录失效、访问策略拒绝、共享额度耗尽、上游限流、歌曲无权限、VKey 失败、设备限制、超时和协议不兼容分别提示。可配置接口失败时静默。
+- 详细搜索仅在上游返回限流时，调用一次官方快速搜索；播放前按同一 MID 补齐详情。Web 服务共享额度耗尽、备用搜索失败或取链限流时直接停止，不循环请求。
 - 单次流程默认总时限 25 秒，单个请求默认 8 秒，多个接口共用剩余预算；不自动重试，不自动换歌或降音质。并发保护在单个 Fulcrum 工作进程内生效：同一会话发送者同时最多一条请求、每绑定最多 16 条、全进程最多 64 条。跨进程保护依靠上游 Web 服务的缓存、请求合并与并发控制。
 
 发送中如果微桥登录身份变化、渠道停用/删除或插件绑定停用，丢弃结果。手机是否实际发送成功沿用现有命令回报机制；入队不等于送达，失败不自动重复发送。
@@ -53,6 +54,7 @@ api = { song = ["get_song_urls", "get_song_url"] }
 | 用途 | GET 路径 | 关键参数与字段 |
 | --- | --- | --- |
 | 搜索 | `/search/search_by_type` | `keyword`、`search_type=0`、`num`、`page=1`、`highlight=false`；读取 `data.song` |
+| 上游搜索限流时的备用搜索 | `/search/quick_search` | `keyword`；读取 `data.song.itemlist`，详情和取链仍严格匹配同一 MID |
 | 补充详情 | `/song/query_song` | `value=MID`、可选 `song_type`；读取 `data.tracks`，严格匹配 MID |
 | 获取播放地址 | `/song/{mid}/url` | `file_type` 整数、可选 `media_mid` / `song_type`；读取 `data.data`，严格匹配 MID 和 `result=0` |
 | CDN | `/song/get_cdn_dispatch` | 当 `purl` 为相对路径时读取 `data.sip` 并安全拼接 |

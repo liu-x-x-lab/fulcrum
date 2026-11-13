@@ -201,10 +201,31 @@ class MusicApi:
         return data
 
     def search(self, keyword: str) -> list[Song]:
-        data = self.get("/search/search_by_type", "search", {
-            "keyword": keyword, "search_type": 0, "num": self.config.result_limit,
-            "page": 1, "highlight": "false",
-        })
+        try:
+            data = self.get("/search/search_by_type", "search", {
+                "keyword": keyword, "search_type": 0, "num": self.config.result_limit,
+                "page": 1, "highlight": "false",
+            })
+        except MusicError as exc:
+            if exc.kind != "limited":
+                raise
+            # One alternate official search, only for upstream throttling, never Web quota exhaustion.
+            data = self.get("/search/quick_search", "quick_search", {"keyword": keyword})
+            category = data.get("song")
+            values = category.get("itemlist") if isinstance(category, Mapping) else None
+            if not isinstance(values, list):
+                raise MusicError("incompatible", "quick_search")
+            songs: dict[str, Song] = {}
+            for value in values:
+                if not isinstance(value, Mapping):
+                    continue
+                mid, title = identifier(value.get("mid")), inline_text(value.get("name"))
+                if mid and title:
+                    songs.setdefault(mid, Song(mid=mid, title=title, singer=inline_text(value.get("singer"), 300),
+                                               needs_detail=True))
+                if len(songs) >= self.config.result_limit:
+                    break
+            return list(songs.values())
         values = data.get("song")
         if not isinstance(values, list):
             raise MusicError("incompatible", "search")
