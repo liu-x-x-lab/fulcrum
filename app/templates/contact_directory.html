@@ -2,7 +2,7 @@
 {% from '_identity.html' import identity %}
 {# 好友:所有账号的好友合在一起,一行一个好友,可直接去聊天记录。 #}
 {% block hero_actions %}
-<div class="chip-row"><span class="chip chip-outline">共 {{ directory.paging.total }} 位好友</span></div>
+<div class="chip-row"><a class="btn btn-secondary" href="/contacts/check{% if directory.channel_id %}?channel_id={{ directory.channel_id }}{% endif %}">好友检测</a><span class="chip chip-outline">共 {{ directory.paging.total }} 位好友</span></div>
 {% endblock %}
 {% block content %}
 <section class="work-surface">

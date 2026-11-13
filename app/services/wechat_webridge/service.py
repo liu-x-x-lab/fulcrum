@@ -189,14 +189,24 @@ def persist_directory_result(
     now = now_shanghai()
     counts = {"contacts": 0, "groups": 0, "members": 0}
     if command_name in {"friends", "friends_all"}:
-        for item in _result_items(result, "items", "friends", "contacts"):
+        items = _result_items(result, "items", "friends", "contacts")
+        contacts: dict[str, WorkWechatContact] = {}
+        conversations: dict[str, Conversation] = {}
+        # 全量好友只读取两次数据库，避免每位好友重复查询；仍由租户会话限制数据归属。
+        if items:
+            for contact in db.scalars(select(WorkWechatContact).where(WorkWechatContact.channel_id == channel.id)).all():
+                contacts.setdefault(contact.contact_external_id, contact)
+            for conversation in db.scalars(select(Conversation).where(Conversation.channel_id == channel.id)).all():
+                conversations.setdefault(conversation.external_id, conversation)
+        for item in items:
             external_id = _directory_id(item, "account_id", "user_name", "wxid", "username", "id")
             if not external_id:
                 continue
-            contact = db.scalar(select(WorkWechatContact).where(WorkWechatContact.channel_id == channel.id, WorkWechatContact.contact_external_id == external_id))
+            contact = contacts.get(external_id)
             if contact is None:
                 contact = WorkWechatContact(channel_id=channel.id, contact_external_id=external_id, first_seen_at=now)
                 db.add(contact)
+                contacts[external_id] = contact
             contact.contact_kind = "friend"
             contact.name = str(item.get("nick_name") or item.get("nickname") or item.get("display_name") or item.get("remark") or external_id)[:255]
             contact.display_name = str(item.get("display_name") or item.get("remark") or item.get("nick_name") or item.get("nickname") or external_id)[:255]
@@ -206,7 +216,7 @@ def persist_directory_result(
             contact.last_seen_at = now
             contact.last_synced_at = now
             contact.raw_contact_json = json.dumps(item, ensure_ascii=False, sort_keys=True)
-            conversation = db.scalar(select(Conversation).where(Conversation.channel_id == channel.id, Conversation.external_id == external_id))
+            conversation = conversations.get(external_id)
             if conversation is not None:
                 conversation.title = contact.display_name
             counts["contacts"] += 1
@@ -927,6 +937,17 @@ def _complete_moments_command(db: Session, channel: Channel, job: TaskJob, data:
     return {"ok": True, "job_id": int(job.id), "status": "completed"}
 
 
+def _persist_friend_operation(db: Session, channel: Channel, job: TaskJob) -> None:
+    if job.related_type not in {"webridge_friend_check", "webridge_friend_action"}:
+        return
+    from app.services.wechat_webridge import friend_actions, friend_check_runs
+
+    if job.related_type == "webridge_friend_action":
+        # 备注、删除仍按插件的确认结果幂等更新资料，页面关闭也会执行。
+        friend_actions.poll_action(db, channel, int(job.id))
+    friend_check_runs.record_completed_job(db, channel, job)
+
+
 def accept_command_result(db: Session, channel: Channel, payload: dict[str, Any]) -> dict[str, Any]:
     """按 command request_id 完成任务；重复回报返回已处理状态。"""
 
@@ -943,9 +964,19 @@ def accept_command_result(db: Session, channel: Channel, payload: dict[str, Any]
             job_id = int(request_id[4:])
         except ValueError:
             job_id = 0
-    jobs = [db.get(TaskJob, job_id)] if job_id > 0 else db.scalars(
-        select(TaskJob).where(TaskJob.job_type == JOB_TYPE, TaskJob.status.in_(("running", "completed", "failed")))
-    ).all()
+    if job_id > 0:
+        jobs = [db.get(TaskJob, job_id)]
+    else:
+        # 新命令已有唯一去重键，直接利用索引定位；旧任务缺少该键时保留原匹配方式。
+        job = db.scalar(select(TaskJob).where(
+            TaskJob.job_type == JOB_TYPE,
+            TaskJob.tenant_id == channel.tenant_id,
+            TaskJob.dedupe_key == f"webridge:{channel.id}:{request_id}",
+            TaskJob.status.in_(("running", "completed", "failed")),
+        ))
+        jobs = [job] if job is not None else db.scalars(
+            select(TaskJob).where(TaskJob.job_type == JOB_TYPE, TaskJob.status.in_(("running", "completed", "failed")))
+        ).all()
     for job in jobs:
         if job is None or str(job.job_type or "") != JOB_TYPE:
             continue
@@ -960,6 +991,7 @@ def accept_command_result(db: Session, channel: Channel, payload: dict[str, Any]
         if job_id <= 0 and stored_request_id != request_id:
             continue
         if job.status in {"completed", "failed"}:
+            _persist_friend_operation(db, channel, job)
             return {"ok": True, "deduplicated": True, "job_id": int(job.id), "status": job.status}
         result = as_object(payload.get("result"))
         if text(as_object(data.get("command")).get("type")) in PAYMENT_COMMANDS:
@@ -994,6 +1026,7 @@ def accept_command_result(db: Session, channel: Channel, payload: dict[str, Any]
                 )
             settle_outbound_message(db, job, ok=True)
             complete_job(db, job, result={"webridge": _compact_result_for_storage(payload, counts)})
+            _persist_friend_operation(db, channel, job)
             logger.info("webridge command completed", extra={"channel_id": channel.id, "job_id": job.id, "request_id": request_id})
             return {"ok": True, "job_id": int(job.id), "status": "completed"}
         failed_command = as_object(data.get("command"))
@@ -1005,6 +1038,7 @@ def accept_command_result(db: Session, channel: Channel, payload: dict[str, Any]
             member_directory.after_result(db, channel, text(as_object(failed_command.get("params")).get("room_id")), complete=False)
         settle_outbound_message(db, job, ok=False, error=text(result.get("error") or payload.get("error") or "webridge_command_failed"))
         fail_job_terminal(db, job, error_message=text(result.get("error") or payload.get("error") or "webridge_command_failed"), result={"webridge": payload})
+        _persist_friend_operation(db, channel, job)
         logger.error("webridge command failed", extra={"channel_id": channel.id, "job_id": job.id, "request_id": request_id, "error_code": text(result.get("error") or payload.get("error") or "webridge_command_failed")})
         return {"ok": True, "job_id": int(job.id), "status": "failed"}
     raise ValueError("webridge_request_not_found")

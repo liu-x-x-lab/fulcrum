@@ -214,6 +214,7 @@ from app.web.auth_common import (
     tenant_must_change_password_redirect,
 )
 from app.web.tenant_navigation import build_tenant_navigation
+from app.web.contact_check import router as contact_check_router
 configure_logging()
 logger = get_logger(__name__)
 
@@ -234,6 +235,7 @@ app.include_router(open_media_router)
 app.include_router(payment_webhook_router)
 app.include_router(workwechat_provider_cloud_router)
 app.include_router(wechat_webridge_router)
+app.include_router(contact_check_router)
 app.include_router(guga_agent_router)
 app.include_router(local_proxy_connector_router)
 app.include_router(provider_router)
