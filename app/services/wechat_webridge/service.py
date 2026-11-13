@@ -181,14 +181,14 @@ def persist_directory_result(
     db: Session, channel: Channel, command: dict[str, Any], result: dict[str, Any],
     *, snapshot_revision: int | None = None, snapshot_started_at: datetime | None = None,
 ) -> dict[str, int]:
-    """把好友、群组和群成员同步结果写入现有联系人与群组实体。"""
+    """把好友、公众号、群组和群成员同步结果写入现有联系人与群组实体。"""
 
     command_name = text(command.get("type") or command.get("command_name"))
     if command_name in {"groups_all", "room_members"}:
         db.flush()
     now = now_shanghai()
     counts = {"contacts": 0, "groups": 0, "members": 0}
-    if command_name in {"friends", "friends_all"}:
+    if command_name in {"friends", "friends_all", "official_accounts"}:
         for item in _result_items(result, "items", "friends", "contacts"):
             external_id = _directory_id(item, "account_id", "user_name", "wxid", "username", "id")
             if not external_id:
@@ -197,7 +197,8 @@ def persist_directory_result(
             if contact is None:
                 contact = WorkWechatContact(channel_id=channel.id, contact_external_id=external_id, first_seen_at=now)
                 db.add(contact)
-            contact.contact_kind = "friend"
+            # 公众号由专用接口确认类型,不能依赖 gh_ 前缀或混入好友列表。
+            contact.contact_kind = "official_account" if command_name == "official_accounts" else "friend"
             contact.name = str(item.get("nick_name") or item.get("nickname") or item.get("display_name") or item.get("remark") or external_id)[:255]
             contact.display_name = str(item.get("display_name") or item.get("remark") or item.get("nick_name") or item.get("nickname") or external_id)[:255]
             contact.avatar_url = str(item.get("avatar_url") or item.get("avatar") or item.get("head_img_url") or "") or None
@@ -710,6 +711,9 @@ def _poll_maintenance(db: Session, channel: Channel) -> None:
     from app.services.wechat_webridge import member_directory
 
     member_directory.retry_due(db, channel)
+    from app.services.wechat_webridge import official_accounts
+
+    official_accounts.request_sync(db, channel)
 
 
 def _enqueue_device_status(db: Session, channel: Channel) -> None:
@@ -966,9 +970,16 @@ def accept_command_result(db: Session, channel: Channel, payload: dict[str, Any]
             return _complete_payment_command(db, channel, job, data, payload, result)
         if text(as_object(data.get("command")).get("type")) in {"moments_list", "moments_operation"}:
             return _complete_moments_command(db, channel, job, data, payload, result)
-        if bool(payload.get("ok")) or bool(result.get("ok")):
-            command = as_object(data.get("command"))
-            command_type = text(command.get("type") or command.get("command_name"))
+        # 8080 外层 ok 是执行结果；明确失败不能被业务诊断中的 ok 覆盖。
+        succeeded = bool(payload["ok"]) if "ok" in payload else bool(result.get("ok"))
+        command = as_object(data.get("command"))
+        command_type = text(command.get("type") or command.get("command_name"))
+        if command_type == "official_accounts":
+            from app.services.wechat_webridge import official_accounts
+
+            result = as_object(result.get("result")) or result
+            succeeded = official_accounts.successful_result(payload, result)
+        if succeeded:
             from app.services.wechat_webridge import group_sync
 
             # 群列表同步:先记下已有的群,结果写入后对"新发现的群"继续下发成员同步。
@@ -992,6 +1003,10 @@ def accept_command_result(db: Session, channel: Channel, payload: dict[str, Any]
                     db, channel, text(as_object(command.get("params")).get("room_id")),
                     complete=bool(counts.get("members_complete")), stale=bool(counts.get("stale_snapshot")),
                 )
+            elif command_type == "official_accounts":
+                job.status = "completed"
+                db.flush()
+                official_accounts.after_result(db, channel, data, result)
             settle_outbound_message(db, job, ok=True)
             complete_job(db, job, result={"webridge": _compact_result_for_storage(payload, counts)})
             logger.info("webridge command completed", extra={"channel_id": channel.id, "job_id": job.id, "request_id": request_id})

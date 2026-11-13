@@ -2332,7 +2332,7 @@ async def wechat_webridge_dashboard_command_action(
     args_json: str = Form("{}"),
     csrf_token: str = Form(""),
 ):
-    """从后台直接发起好友、群组和成员同步命令。"""
+    """从后台直接发起好友、公众号、群组和成员同步命令。"""
 
     enforce_role(request, "ops")
     db = get_session()
@@ -2347,7 +2347,14 @@ async def wechat_webridge_dashboard_command_action(
             return RedirectResponse(url=f"/channels/{channel_id}/wechat-webridge?notice={quote('参数 JSON 无效')}", status_code=303)
         if not isinstance(args, dict):
             return RedirectResponse(url=f"/channels/{channel_id}/wechat-webridge?notice={quote('参数必须是 JSON 对象')}", status_code=303)
-        job = enqueue_command(db, channel, command_name=command_name, args=args)
+        if command_name == "official_accounts" and not args:
+            from app.services.wechat_webridge import official_accounts
+
+            job = official_accounts.request_sync(db, channel, force=True)
+            if job is None:
+                raise ValueError("请先完成账号接入并启用渠道")
+        else:
+            job = enqueue_command(db, channel, command_name=command_name, args=args)
         db.commit()
         return RedirectResponse(url=f"/channels/{channel_id}/wechat-webridge?notice={quote(f'已提交 {command_name}，任务 #{job.id}')}", status_code=303)
     except ValueError as exc:
