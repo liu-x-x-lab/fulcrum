@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% block back %}<a class="page-back" href="/plugins" title="返回插件" aria-label="返回插件"><span class="i i-arrow-left" aria-hidden="true"></span></a>{% endblock %}
 {# 插件页:配置是主体。每个绑定的机器人一张卡片(和群功能同一套交互:右侧小箭头展开、开关点击即保存、保存用 fetch 并弹出提示)。
    编码、版本、作者、适用范围、能力标签这些很少有人看的信息都收进最下面折叠的"技术信息"。 #}
 {% block hero_actions %}
@@ -87,14 +88,14 @@
         </div>
       </div>
       <footer class="gf-foot">
-        <button class="btn" type="submit">保存</button>
+        <button class="btn" type="submit"><span class="i i-save" aria-hidden="true"></span><span>保存</span></button>
         {# 重载是另一个表单(HTML 不允许表单嵌套),用 form 属性让这个按钮提交它。 #}
-        <button class="btn btn-secondary" type="submit" form="reload-binding-{{ item.id }}">重载</button>
+        <button class="btn btn-secondary btn-icon" type="submit" form="reload-binding-{{ item.id }}" title="重载" aria-label="重载"><span class="i i-refresh" aria-hidden="true"></span></button>
         <button class="btn btn-danger" type="submit" form="unbind-binding-{{ item.id }}">解绑机器人</button>
       </footer>
     </div>
   </form>
-  <form id="reload-binding-{{ item.id }}" method="post" action="/plugins/{{ item.id }}/reload" hidden>
+  <form id="reload-binding-{{ item.id }}" method="post" action="/plugins/{{ item.id }}/reload" hidden data-action-feedback>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     <input type="hidden" name="next" value="/plugins/{{ plugin.id }}" />
   </form>
@@ -127,7 +128,7 @@
       {% endwith %}
       <div class="full-row form-actions-inline">
         <button class="btn" type="submit">保存绑定</button>
-        <button class="btn btn-ghost" type="button" data-modal-close>取消</button>
+        <button class="btn btn-ghost" type="button" data-modal-close><span class="i i-x" aria-hidden="true"></span><span>取消</span></button>
       </div>
     </form>
   </div>

@@ -16,6 +16,7 @@ from app.services.inbound_media import create_wechat_media_attachment
 from app.services.message_state import refresh_conversation_last_message_at
 from app.services.open_webhooks import dispatch_open_message_event
 from app.services.chatroom_registry import is_collection_off
+from app.services.chatroom_invitations import record_invitation_event
 from app.services.self_sent import is_self_sent
 from app.services.task_queue import INBOUND_MEDIA_FETCH_JOB, PLUGIN_DISPATCH_JOB, WORKWECHAT_CLOUD_CONTROL_JOB, enqueue_job
 from app.services.workwechat_cloud_poll import is_cloud_poll_enabled, notify_cloud_job_enqueued
@@ -150,6 +151,33 @@ def ingest_normalized_event(
 
         sync_wechat_gugatool_chatroom_from_message(db, channel, normalized, conversation=conversation)
 
+    details = normalized.get("details") if isinstance(normalized.get("details"), dict) else {}
+    recalled = details.get("recall")
+    if channel.channel_type == "wechat_webridge" and isinstance(recalled, dict):
+        from app.services.message_actions import apply_recall_event
+
+        originals = apply_recall_event(db, channel, conversation, recalled, raw_event_id=int(raw_event.id))
+        if originals:
+            message_id = int(originals[0].id)
+        else:
+            # 新协议有时只给服务器编号、甚至没有编号；保留可读通知，绝不误撤其他消息。
+            notification = Message(
+                conversation_id=conversation.id, direction=_resolve_message_direction(normalized),
+                sender_id=str(message_payload.get("sender_id") or "") or None,
+                sender_name=message_payload.get("sender_name"), content=str(recalled.get("text") or "一条消息已被撤回"),
+                message_type="system", status="received",
+            )
+            db.add(notification)
+            db.flush()
+            message_id = int(notification.id)
+            refresh_conversation_last_message_at(db, conversation.id)
+        raw_event.status = "mapped"
+        dispatch = {"mode": "storage_only", "queued": False, "reason": "message_recalled", "message_id": message_id, "conversation_id": conversation.id, "raw_event_id": raw_event.id, "matched": bool(originals)}
+        raw_event.dispatch_summary_json = json.dumps(dispatch, ensure_ascii=False)
+        # 撤回既不是新发言，也不是媒体回显，不触发插件、AI、开放消息通知或群资料同步。
+        db.commit()
+        return {"ok": True, "deduplicated": False, "mapped": True, "raw_event_id": raw_event.id, "normalized": normalized, "dispatch": dispatch}
+
     if channel.channel_type == "wechat_ipad":
         from app.services.wechat_ipad.chatrooms import sync_wechat_ipad_chatroom_from_message
         from app.services.wechat_ipad.service import should_sync_wechat_ipad_chatroom_for_event, sync_wechat_ipad_chatrooms
@@ -235,10 +263,13 @@ def ingest_normalized_event(
         from app.services.wechat_webridge.group_sync import observe_inbound_event
         from app.services.wechat_webridge.member_directory import apply_event
         from app.services.wechat_webridge.message_directory import observe_message
+        from app.services.wechat_webridge.official_accounts import observe_message as observe_official_message
 
         observe_inbound_event(db, channel, normalized, conversation)
         apply_event(db, channel, normalized, conversation)
         observe_message(db, channel, normalized, conversation)
+        # 公众号没有好友快照时，按匹配账号的文章发布者补名称，历史消息共用身份目录。
+        observe_official_message(db, channel, normalized, conversation)
     elif channel.channel_type == "workwechat":
         from app.services.workwechat_chatrooms import sync_workwechat_chatroom_from_message
         from app.services.workwechat_contacts import apply_workwechat_contact_event
@@ -252,11 +283,25 @@ def ingest_normalized_event(
             conversation=conversation,
         )
 
+    # 邀请关系属于成员基础资料；在插件及通知开关前记录，群关闭采集仍由入口统一拦截。
+    record_invitation_event(db, channel, conversation, normalized, recorded_at=_resolve_event_time(normalized))
+
     message_content = str(message_payload.get("content") or "")
     message_id: int | None = None
     mapped = bool(normalized.get("should_persist_message") and message_content)
     message_direction = _resolve_message_direction(normalized)
     if mapped:
+        if channel.channel_type == "wechat_webridge":
+            from app.services.wechat_webridge.message_echo import reconcile_echo
+
+            original = reconcile_echo(db, channel, conversation, normalized)
+            if original is not None:
+                # 回传只补身份和微信编号，不重复统计、调度插件或创建媒体占位附件。
+                raw_event.status = "mapped"
+                dispatch = {"mode": "storage_only", "queued": False, "reason": "outbound_echo", "message_id": original.id, "conversation_id": conversation.id, "raw_event_id": raw_event.id}
+                raw_event.dispatch_summary_json = json.dumps(dispatch, ensure_ascii=False)
+                db.commit()
+                return {"ok": True, "deduplicated": True, "mapped": True, "raw_event_id": raw_event.id, "normalized": normalized, "dispatch": dispatch}
         message = Message(
             conversation_id=conversation.id,
             direction=message_direction,

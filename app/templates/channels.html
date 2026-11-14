@@ -1,20 +1,21 @@
 {% extends 'base.html' %}
 {% from '_identity.html' import identity %}
+{% from '_account_presence.html' import account_presence %}
 {% block hero_actions %}
 <div class="hero-action-cluster">
-  <a class="btn" href="/channels/connect">接入账号</a>
+  <a class="btn" href="/channels/connect"><span class="i i-plus" aria-hidden="true"></span><span>接入账号</span></a>
   {% if quota %}<span class="chip chip-outline">剩余额度 {{ quota.remaining }}</span>{% endif %}
 </div>
 {% endblock %}
 {% block content %}
-{% set online_total = account_rows | selectattr('channel.is_enabled') | list | length %}
+{% set online_total = account_rows | selectattr('presence.state', 'equalto', 'online') | list | length %}
 <section class="metric-band account-metric-band" aria-label="账号接入概览">
   <div class="metric-item">
     <span>账号总数</span>
     <strong>{{ account_rows|length }}</strong>
   </div>
   <div class="metric-item">
-    <span>已启用</span>
+    <span>当前在线</span>
     <strong>{{ online_total }}</strong>
   </div>
   <div class="metric-item">
@@ -32,7 +33,9 @@
     <div>
 
       <h2>账号清单</h2>
+      <p class="muted-text">在线状态根据最近活动判断</p>
     </div>
+    <a class="btn btn-small btn-secondary btn-icon" href="/channels" title="刷新状态" aria-label="刷新状态"><span class="i i-refresh" aria-hidden="true"></span></a>
   </div>
   {% if account_rows %}
   {# 账号清单使用连续记录行，移动端重新排版，不依赖固定宽表产生横向页面滚动。 #}
@@ -45,7 +48,7 @@
       </div>
       <dl class="record-meta">
         <div>
-          <dt>连接状态</dt>
+          <dt>接入状态</dt>
           <dd><span class="chip {% if row.channel.is_enabled %}chip-success{% elif row.connection.state == 'failed' %}badge-error{% else %}chip-muted{% endif %}">{{ row.connection.label }}</span></dd>
         </div>
         <div>
@@ -53,8 +56,8 @@
           <dd>{{ row.bot_name }}</dd>
         </div>
         <div>
-          <dt>最近在线</dt>
-          <dd>{{ row.last_online_at|bj_time if row.last_online_at else '-' }}</dd>
+          <dt>机器人在线</dt>
+          <dd>{{ account_presence(row.presence) }}</dd>
         </div>
         <div>
           <dt>额度</dt>
@@ -62,7 +65,7 @@
         </div>
       </dl>
       <div class="record-actions">
-        <a class="btn btn-small btn-secondary" href="/channels/{{ row.channel.id }}">详情</a>
+        <a class="btn btn-small btn-secondary btn-icon" href="/channels/{{ row.channel.id }}" title="详情" aria-label="详情"><span class="i i-chevron-right" aria-hidden="true"></span></a>
         {# 只有未启用的账号可以删除:从清单隐藏并释放额度,聊天数据保留。 #}
         {% if not row.channel.is_enabled %}
         <form
@@ -76,7 +79,7 @@
           data-confirm-confirm-text="删除账号"
         >
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-          <button class="btn btn-small btn-danger-soft" type="submit">删除</button>
+          <button class="btn btn-small btn-danger-soft" type="submit"><span class="i i-trash" aria-hidden="true"></span><span>删除</span></button>
         </form>
         {% endif %}
       </div>
@@ -86,7 +89,7 @@
   {% else %}
   <div class="empty-state account-empty-state">
     <strong>还没有接入账号</strong>
-    <a class="btn" href="/channels/connect">接入第一个账号</a>
+    <a class="btn" href="/channels/connect"><span class="i i-plus" aria-hidden="true"></span><span>接入第一个账号</span></a>
   </div>
   {% endif %}
 </section>

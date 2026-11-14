@@ -9,6 +9,8 @@
   <title>{{ page_title }} - Fulcrum</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="stylesheet" href="/static/css/icons.css" />
+  <link rel="stylesheet" href="/static/css/directory-sync.css" />
 </head>
 {# 首次安装页保留设置壳；企业与平台登录统一由 auth_base 提供视觉结构。 #}
 {% set auth_shell_paths = ['/setup', '/setup/completed'] %}
@@ -27,9 +29,7 @@
           <p>{% if is_platform_area %}平台管理后台{% else %}全渠道智能机器人运营平台{% endif %}</p>
         </div>
       </div>
-      {% if notice %}
-      <section class="notice-card{% if notice_tone == 'danger' %} notice-card-danger{% endif %}">{{ notice }}</section>
-      {% endif %}
+      {% include '_action_feedback.html' %}
   {% else %}
   <div class="app-frame">
     {# 复选框只控制移动端主导航展开状态，桌面和移动端始终复用同一份服务端导航数据。 #}
@@ -97,16 +97,18 @@
     <div class="app-main">
       <main class="workspace" id="main-content" tabindex="-1">
       <section class="page-header">
-        <div class="page-header-copy">
-          <h1{% if page_title_class %} class="{{ page_title_class }}"{% endif %}>{{ page_title }}</h1>
-          <div class="page-intro">{% block page_intro %}{% endblock %}</div>
+        {# 返回按钮统一放在页头最左边:二级页面在自己的 {% block back %} 里放一个 .page-back 链接,不再把"返回xx"塞在右侧操作区。 #}
+        <div class="page-header-lead">
+          {% block back %}{% endblock %}
+          <div class="page-header-copy">
+            <h1{% if page_title_class %} class="{{ page_title_class }}"{% endif %}>{{ page_title }}</h1>
+            <div class="page-intro">{% block page_intro %}{% endblock %}</div>
+          </div>
         </div>
         <div class="page-header-actions">{% block hero_actions %}{% endblock %}</div>
       </section>
 
-      {% if notice %}
-      <section class="notice-card{% if notice_tone == 'danger' %} notice-card-danger{% endif %}">{{ notice }}</section>
-      {% endif %}
+      {% include '_action_feedback.html' %}
 
       {% if section_nav_items %}
       <nav class="section-tabs" aria-label="当前模块入口">
@@ -176,6 +178,9 @@
         });
 
         dialog.addEventListener("click", (event) => {
+          // 弹窗内按钮可能在本次点击中切换步骤并改变高度，不能再用变化后的边界误判原点击。
+          // 只有直接落在 dialog 遮罩上的点击才检查坐标，卡片内的任何子元素都不触发关闭。
+          if (event.target !== dialog) return;
           const rect = dialog.getBoundingClientRect();
           const withinDialog =
             rect.top <= event.clientY &&
@@ -206,7 +211,13 @@
               submitter.dataset.originalText = submitter.textContent || "";
               submitter.disabled = true;
               if (submitter.tagName === "BUTTON") {
-                submitter.textContent = "处理中…";
+                // 只有图标的按钮不能把内容换成文字(会丢图标),改为转圈提示忙碌
+                if (submitter.classList.contains("btn-icon")) {
+                  submitter.classList.add("is-busy");
+                  submitter.setAttribute("aria-busy", "true");
+                } else {
+                  submitter.textContent = "处理中…";
+                }
               }
             });
           }, 0);
@@ -263,10 +274,12 @@
   <script src="/static/js/dialog.js" defer></script>
   {# 统一提示条 appToast,以及"开关点击即保存"(data-autosave-*)。 #}
   <script src="/static/js/toast.js" defer></script>
+  <script src="/static/js/action-feedback.js" defer></script>
   <script src="/static/js/switches.js" defer></script>
   {# 图片/视频放大查看器 appLightbox,消息中心和朋友圈共用。 #}
   <script src="/static/js/lightbox.js" defer></script>
   <script src="/static/js/select.js" defer></script>
+  <script src="/static/js/config-suggestions.js" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
