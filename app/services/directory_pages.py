@@ -255,6 +255,8 @@ def build_contact_directory(db: Session, *, keyword: str = "", channel_id: int =
         rows.append(
             {
                 "channel_id": int(item.channel_id),
+                "contact_id": int(item.id),
+                "channel_type": (channels[int(item.channel_id)].channel_type if int(item.channel_id) in channels else ""),
                 "channel_name": (channels[int(item.channel_id)].name if int(item.channel_id) in channels else "") or f"账号 #{item.channel_id}",
                 "identity": make_identity(item.contact_external_id, item.display_name or item.name, item.avatar_url),
                 "remark": item.display_name if item.name and item.display_name and item.display_name != item.name else "",

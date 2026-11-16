@@ -318,7 +318,15 @@ async def startup_event() -> None:
     finally:
         db.close()
     start_background_workers()
-    await local_proxy_relay_server.start()
+    try:
+        await local_proxy_relay_server.start()
+    except OSError:
+        # 中继端口被上一个进程占用时不能让整个后台起不来:消息、插件和渠道
+        # 仍然可用,只影响 iPad 扫码登录这一条链路。
+        logger.exception(
+            "local proxy relay unavailable; iPad scan login may be affected",
+            extra={"host": settings.local_proxy_relay_host, "port": settings.local_proxy_relay_port},
+        )
     log_startup_banner()
 
 
@@ -2697,6 +2705,58 @@ async def contact_directory_page(request: Request, q: str = "", channel_id: int 
         db.close()
 
 
+@app.post("/contacts/{contact_id}/chat")
+async def start_contact_chat(request: Request, contact_id: int, csrf_token: str = Form("")):
+    """从好友列表发起私聊:已有会话直接复用,没有就建一条再进消息中心。"""
+
+    enforce_role(request, "ops")
+    db = get_session()
+    try:
+        require_tenant_csrf(db, request, csrf_token)
+        contact = db.scalar(
+            select(WorkWechatContact).where(
+                WorkWechatContact.id == contact_id,
+                WorkWechatContact.contact_kind == "friend",
+                WorkWechatContact.sync_status == "active",
+                WorkWechatContact.deleted_at.is_(None),
+            )
+        )
+        if contact is None:
+            raise HTTPException(status_code=404, detail="好友不存在")
+        channel = get_channel(db, int(contact.channel_id or 0)) if contact.channel_id else None
+        if channel is None or channel.deleted_at is not None:
+            return RedirectResponse(url=f"/contacts?notice={quote('好友所属账号已删除')}", status_code=303)
+        if channel.channel_type != "wechat_gugatool":
+            # 发起聊天目前只适配了咕嘎渠道;其他渠道维持原有行为,不放行。
+            return RedirectResponse(url=f"/contacts?notice={quote('当前渠道暂不支持从好友发起聊天')}", status_code=303)
+        conversation = db.scalar(
+            select(Conversation)
+            .where(
+                Conversation.bot_id == channel.bot_id,
+                Conversation.channel_id == channel.id,
+                Conversation.external_id == contact.contact_external_id,
+            )
+            .order_by(Conversation.id.asc())
+        )
+        if conversation is None:
+            title = str(contact.display_name or contact.name or contact.contact_external_id)[:255]
+            conversation = Conversation(
+                bot_id=channel.bot_id,
+                channel_id=channel.id,
+                channel_type=channel.channel_type,
+                external_id=contact.contact_external_id,
+                title=title,
+                chat_type="direct",
+            )
+            db.add(conversation)
+            db.flush()
+            record_audit(db, "contact.start-chat", "conversation", conversation.id, f"channel={channel.id} contact={contact.id}")
+            db.commit()
+        return RedirectResponse(url=f"/messages?conversation_id={conversation.id}&channel_id={channel.id}", status_code=303)
+    finally:
+        db.close()
+
+
 # 好友检测统一注册独立的持久化 Router，避免旧入口先匹配而跳过代次与结果保存。
 
 
@@ -4690,12 +4750,16 @@ async def send_manual_message_action(
                 return JSONResponse({"ok": False, "notice": "引用的消息不属于当前会话"}, status_code=400)
             if not supported["quote"] or normalized_type != "text":
                 return JSONResponse({"ok": False, "notice": "当前渠道不支持此类型的引用回复"}, status_code=400)
-            if not reply.external_message_id or reply.status in {"failed", "revoked"} or reply.external_status == "pending":
-                return JSONResponse({"ok": False, "notice": "这条消息尚未确认发送、已撤回或缺少渠道消息编号，无法引用"}, status_code=400)
-            payload["quote_message_id"] = reply.external_message_id
+            try:
+                payload.update(message_actions.quote_payload_for(db, channel, reply))
+            except ValueError as exc:
+                return JSONResponse({"ok": False, "notice": str(exc)}, status_code=400)
         if mentions:
             if not supported["mention"] or normalized_type != "text":
                 return JSONResponse({"ok": False, "notice": "当前渠道不支持此类型的 @ 发送"}, status_code=400)
+            if channel.channel_type == "wechat_gugatool" and payload.get("quote_message_id"):
+                # 手机 SendQuote 没有 @ 字段，两者同时提交会静默丢掉 @，直接拒绝并说明原因。
+                return JSONResponse({"ok": False, "notice": "咕嘎助手暂不支持同时引用并 @ 成员"}, status_code=400)
             try:
                 selected_mentions = message_mentions.validate_members(db, channel, conversation, mentions)
             except ValueError as exc:
@@ -4708,7 +4772,8 @@ async def send_manual_message_action(
                 return JSONResponse({"ok": False, "notice": f"消息太长了，最多 {MANUAL_MESSAGE_MAX_CHARS} 字"}, status_code=400)
             # 展示正文从首次入库就保留 @，手机协议仍使用能在原位置替换昵称的占位符。
             payload["display_content"] = visible_content
-            if channel.channel_type == "wechat_ipad":
+            if channel.channel_type in {"wechat_ipad", "wechat_gugatool"}:
+                # 这两类渠道的发送接口用 At 字段 + 正文里的 @昵称，正文不能保留占位符。
                 payload["at"] = ",".join(mentions)
                 payload["content"] = visible_content
             else:
@@ -4730,6 +4795,10 @@ async def send_manual_message_action(
             payload["file_name"] = stored["file_name"]
             if channel.channel_type in {"wechat_ipad", "telegram"} and normalized_type == "image":
                 payload["image_base64"] = base64.b64encode(binary).decode("ascii")
+            elif channel.channel_type == "wechat_gugatool":
+                # 咕嘎适配器把内容转成手机要的原始字节；平台对外地址多数是内网地址，
+                # 再按 URL 回抓会被 SSRF 防护拒绝，这里直接传 base64。
+                payload[{"image": "image_base64", "voice": "voice_base64", "video": "video_base64", "emoji": "emoji_base64", "file": "file_base64"}[normalized_type]] = base64.b64encode(binary).decode("ascii")
             elif channel.channel_type == "wechat_ipad" and normalized_type == "voice":
                 payload["voice_path"] = str(stored["target_path"])
             else:
@@ -4823,6 +4892,10 @@ def load_conversation_messages(db: Session, conversation_id: int, *, before_id: 
         if attachments.get(int(item.id)) and item.message_type in message_actions.MEDIA_TYPES and view["kind"] != "media":
             view = {"kind": "media", "media_type": item.message_type, "label": message_actions.MEDIA_LABELS[item.message_type]}
         view = message_view.attach_media(view, attachments.get(int(item.id), []))
+        quote = raw.get("quote")
+        if view["kind"] == "text" and isinstance(quote, dict):
+            # 入站引用按快照还原卡片:正文是回复内容,引用块显示原发送人和原文。
+            view = message_view.quote_view(quote, item.content)
         reply = raw.get("reply_to")
         if view["kind"] == "text" and isinstance(reply, dict):
             view = {"kind": "quote", "title": item.content, "refer_name": str(reply.get("name") or ""), "refer_text": str(reply.get("text") or "")}
