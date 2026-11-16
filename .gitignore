@@ -55,3 +55,11 @@ plugins/video_man/
 plugins/fanhao_search/
 plugins/xiuren_image/
 plugins/sehuatang_push/
+
+# 本机开发运行产物:数据库、系统文件与内部过程文档,不进入版本库。
+.DS_Store
+app.db
+.trae/
+data/task_job_payloads/
+data/tenants/
+data/inbound_media/
