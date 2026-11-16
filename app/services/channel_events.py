@@ -178,6 +178,36 @@ def ingest_normalized_event(
         db.commit()
         return {"ok": True, "deduplicated": False, "mapped": True, "raw_event_id": raw_event.id, "normalized": normalized, "dispatch": dispatch}
 
+    if channel.channel_type == "wechat_gugatool" and isinstance(recalled, dict):
+        from app.services.message_actions import apply_gugatool_recall_event
+
+        originals = apply_gugatool_recall_event(
+            db,
+            channel,
+            conversation,
+            recalled,
+            message_payload=message_payload,
+            raw_event_id=int(raw_event.id),
+        )
+        # 自己撤回时微信也会回一条 10002 通知;平台已经在那条出站消息上显示过
+        # “你撤回了一条消息”,这里不能再生成一条署名为对方的系统发言。
+        self_revoked = "你撤回" in str(recalled.get("text") or "")
+        if originals or self_revoked:
+            raw_event.status = "mapped"
+            dispatch = {
+                "mode": "storage_only",
+                "queued": False,
+                "reason": "message_recalled",
+                "message_id": int(originals[0].id) if originals else None,
+                "conversation_id": conversation.id,
+                "raw_event_id": raw_event.id,
+                "matched": bool(originals),
+            }
+            raw_event.dispatch_summary_json = json.dumps(dispatch, ensure_ascii=False)
+            # 撤回是消息状态更新,不触发插件、AI、开放消息通知。
+            db.commit()
+            return {"ok": True, "deduplicated": False, "mapped": True, "raw_event_id": raw_event.id, "normalized": normalized, "dispatch": dispatch}
+
     if channel.channel_type == "wechat_ipad":
         from app.services.wechat_ipad.chatrooms import sync_wechat_ipad_chatroom_from_message
         from app.services.wechat_ipad.service import should_sync_wechat_ipad_chatroom_for_event, sync_wechat_ipad_chatrooms
@@ -310,6 +340,9 @@ def ingest_normalized_event(
             content=message_content,
             message_type=str(message_payload.get("message_type") or "text"),
             external_message_id=str(message_payload.get("external_message_id") or "") or None,
+            # 引用原文和微信本地/服务端编号单独留一份快照:消息表只有正文一列,
+            # 消息中心靠它还原引用卡片,发送引用时也不必回头解析原始事件。
+            raw_request_json=_inbound_snapshot(details),
             status="received",
         )
         db.add(message)
@@ -561,6 +594,34 @@ def _resolve_message_direction(normalized: dict[str, Any]) -> str:
     candidate = str(message_payload.get("direction") or details.get("direction") or "").strip().lower()
     # 当前只允许 in/out 两种方向落库，避免外部 payload 写入任意状态值污染统计口径。
     return candidate if candidate in {"in", "out"} else "in"
+
+
+def _inbound_snapshot(details: dict[str, Any]) -> str | None:
+    """入站消息留一份引用原文与微信本地/服务端编号。
+
+    - quote: 消息中心还原引用卡片,插件也能读到被引用的原文;
+    - native_ids: 咕嘎手机发送引用只认 local_id/msg_svr_id,先存下来,
+      后续即使原始事件被清理或来自历史补拉,也能正常引用。
+    """
+
+    snapshot: dict[str, Any] = {}
+    quote = details.get("quote_payload")
+    if isinstance(quote, dict) and quote:
+        snapshot["quote"] = quote
+    native: dict[str, int] = {}
+    for source, target in (("local_message_id", "local"), ("server_message_id", "server")):
+        value = details.get(source)
+        if isinstance(value, bool):
+            continue
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            native[target] = number
+    if native:
+        snapshot["native_ids"] = native
+    return json.dumps(snapshot, ensure_ascii=False) if snapshot else None
 
 
 def _resolve_wechat_winauto_attachment_direction(
