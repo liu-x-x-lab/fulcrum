@@ -18,7 +18,9 @@ os.environ.setdefault("LOG_DIR", tempfile.mkdtemp(prefix="plugin-detail-logs-"))
 import pytest
 from sqlalchemy import select
 
-import app.main as main_module
+import app.core.application as application_metadata
+import app.web.plugins.routes as plugin_routes
+import app.web.shared.presentation as presentation
 from app.models.entities import BotPlugin, Plugin
 from app.services import plugin_directory
 from test_provider_node_pages import _login, provider_page_context  # noqa: F401  (provider_page_context 是 fixture)
@@ -86,7 +88,7 @@ def test_the_plugin_list_shows_versions_descriptions_problems_and_a_plain_config
     with ids["factory"]() as db:
         weather = db.get(Plugin, weather_id)
         version, description = weather.version, weather.description
-    real = main_module.get_plugin_runtime_meta_map
+    real = plugin_routes.get_plugin_runtime_meta_map
 
     def runtime_with_manifest_error(codes):
         return {
@@ -94,7 +96,7 @@ def test_the_plugin_list_shows_versions_descriptions_problems_and_a_plain_config
             for code, meta in real(codes).items()
         }
 
-    monkeypatch.setattr(main_module, "get_plugin_runtime_meta_map", runtime_with_manifest_error)
+    monkeypatch.setattr(plugin_routes, "get_plugin_runtime_meta_map", runtime_with_manifest_error)
     _login(client, "admin")
     html = client.get("/plugins").text
     rows = html.split('<article class="plugin-card')[1:]
@@ -107,7 +109,7 @@ def test_the_plugin_list_shows_versions_descriptions_problems_and_a_plain_config
 
 
 def test_a_dependent_field_is_marked_so_it_dims_when_its_switch_is_off() -> None:
-    template = main_module.templates.env.get_template("_plugin_config_form.html")
+    template = presentation.templates.env.get_template("_plugin_config_form.html")
     view = {
         "mode": "schema", "description": "",
         "fields": [
@@ -118,7 +120,7 @@ def test_a_dependent_field_is_marked_so_it_dims_when_its_switch_is_off() -> None
     html = template.render(config_view=view)
     assert 'data-gf-depends="schema__loud"' in html and html.count("data-gf-depends") == 1  # 只有依赖项带标记
     # 开关前面有同名隐藏域,脚本必须取复选框来判断,否则永远变淡
-    script = (main_module.APP_ROOT / "app" / "static" / "js" / "group-features.js").read_text(encoding="utf-8")
+    script = (application_metadata.APP_ROOT / "app" / "static" / "js" / "group-features.js").read_text(encoding="utf-8")
     assert "input[type=\"checkbox\"][name=" in script
 
 

@@ -26,6 +26,7 @@ Read the relevant canonical guide before editing its boundary:
 
 | Work | Reference |
 | --- | --- |
+| Module ownership, import direction and shared external services | [Architecture](docs/architecture.md) |
 | Plugin manifest, execution, configuration, schedules, packaging | [Plugin development](docs/plugin-development.md) |
 | Templates, components, visual values, interaction and accessibility | [UI guidelines](docs/ui/soft-ui-guidelines.md) |
 | Test selection, isolation and maintenance | [Testing](tests/README.md) |
@@ -53,6 +54,15 @@ framework, database, worker architecture, or authentication system.
 | [tenant_context.py](app/core/tenant_context.py), [tenant_db.py](app/core/tenant_db.py) | Trusted tenant identity and database scope |
 | [app/models](app/models), [migrations](migrations) | Persistence and Alembic changes |
 | [app/templates](app/templates), [app/static](app/static) | Shared UI and browser behavior |
+
+Keep `app/main.py` limited to composition, lifecycle, middleware and health probes.
+Browser features belong in domain directories under `app/web`; reusable access,
+rendering and parsing helpers belong in `app/web/shared`. Routers MUST NOT import
+`app.main`. In the iPad service, keep protocol operations separate from read-only
+views and diagnostics. Follow the [source map](docs/architecture.md#source-map).
+Split by business responsibility, use explicit imports and descriptive module
+names, and update callers/tests at the actual owner. Do not create numbered file
+chunks, wildcard imports or compatibility forwarding for moved private helpers.
 
 Choose the existing extension boundary:
 
@@ -110,6 +120,23 @@ business actions. Test incoming automation with a separate sender.
   packages; tenants configure plugins allowed by platform policy.
 - Return truthful errors and safe identifiers. Never log full configuration,
   decrypted secrets, authorization headers or sensitive upstream payloads/URLs.
+
+### Shared AI and rendering dependencies
+
+- **Kitesurf:** reuse `app/services/web_screenshots.py` for web/HTML screenshots
+  and `app/core/markdown_to_image.py` for Markdown output. The platform owns the
+  independent CDP engine and `KITESURF_*` configuration. Preserve tenant context,
+  isolated browser contexts, network restrictions, resource limits and cleanup.
+  Return standard image replies and truthful errors; do not create another engine.
+- **Hindsight:** reuse `app/services/ai_memory.py` and the existing chat/digest
+  worker integration. `HINDSIGHT_URL` is platform-only. Preserve memory opt-in,
+  trusted bank/sender identity, recall/retain timeouts, circuit behavior and digest
+  cursors. Network calls stay outside held database sessions; accepted asynchronous
+  writes are not completed extraction. An unavailable memory service must not
+  prevent ordinary chat.
+- Read [shared dependency contracts](docs/architecture.md#shared-external-services)
+  before changing either integration. Do not turn infrastructure configuration
+  into plugin manifest fields or commit local service data and credentials.
 
 ## 4. UI rules
 

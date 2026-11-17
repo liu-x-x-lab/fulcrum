@@ -8,6 +8,7 @@ one maintained reference; update it when behavior changes.
 
 | Topic | Reference |
 | --- | --- |
+| Module ownership, import direction, Kitesurf and Hindsight | [Architecture and shared dependencies](architecture.md) |
 | Plugin package, manifest, execution, settings, schedules, recall and administration UI | [Plugin development](plugin-development.md) |
 | Installable example | [hello_plugin](plugin-template/hello_plugin) |
 | UI components, tokens, copy, interaction and acceptance | [UI guidelines](ui/soft-ui-guidelines.md) |

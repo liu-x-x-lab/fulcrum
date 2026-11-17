@@ -20,8 +20,8 @@ from app.web.auth_common import (
     TENANT_PASSWORD_PATH,
     build_auth_page_context,
     require_tenant_csrf,
-    safe_return_to,
 )
+from app.web.shared.urls import safe_return_to
 from app.web.tenant_navigation import build_tenant_navigation
 
 

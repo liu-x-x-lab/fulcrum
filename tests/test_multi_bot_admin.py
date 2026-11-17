@@ -1,4 +1,6 @@
-﻿import base64
+﻿
+
+import base64
 import asyncio
 import json
 import os
@@ -43,8 +45,12 @@ from starlette.requests import Request
 from sqlalchemy import create_engine, desc, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
+import app.services.wechat_ipad.operations.sync as ipad_sync
+import app.services.wechat_ipad.views.group_governance as ipad_group_governance
+import app.services.wechat_ipad.views.group_scopes as ipad_group_scopes
 from app.core.db import Base, engine
-from app.main import app, templates
+from app.main import app
+from app.web.shared.presentation import templates
 from app.core.db import SessionLocal
 from app.core.settings import settings
 from app.models.entities import AdminUser, Bot, BotPlugin, Channel, Chatroom, ChatroomMember, Conversation, GroupPluginScope, HealthCheckRecord, Message, Plugin, PointsAccount, PointsPrisonRecord, PointsTransaction, RawWebhookEvent, SignInHistory, SignInRecord, TaskJob
@@ -72,8 +78,10 @@ from app.services.security import build_telegram_webhook_secret, encrypt_secret,
 from app.services.workwechat_cloud_poll import exchange_authorization_code, issue_authorization_code
 from app.services.wechat_ipad.client import WechatIpadApiClient
 from app.services.wechat_ipad.contract import IPAD_874_CONTRACT
-import app.services.wechat_ipad.service as wechat_ipad_service
-from app.services.wechat_ipad.service import build_wechat_ipad_group_summary, build_wechat_ipad_overview, refresh_wechat_ipad_status
+
+from app.services.wechat_ipad.views.groups import build_wechat_ipad_group_summary
+from app.services.wechat_ipad.views.overview import build_wechat_ipad_overview
+from app.services.wechat_ipad.operations.status import refresh_wechat_ipad_status
 from app.services.wechat_ipad.chatrooms import upsert_wechat_ipad_chatroom_profile
 from captcha_helpers import tenant_login_captcha
 
@@ -1391,7 +1399,7 @@ consume_policy = "continue"
                 },
             ),
         ) as outbound_mock, patch(
-            "app.services.wechat_ipad.service.record_wechat_ipad_send_event",
+            'app.services.wechat_ipad.runtime.record_wechat_ipad_send_event',
             return_value={},
         ):
             with SessionLocal() as db:
@@ -2919,7 +2927,7 @@ consume_policy = "shared"
                     },
                 ],
             ):
-                wechat_ipad_service.pull_wechat_ipad_messages(db, channel)
+                ipad_sync.pull_wechat_ipad_messages(db, channel)
 
         with SessionLocal() as db:
             channel = db.get(Channel, 1)
@@ -3948,7 +3956,7 @@ consume_policy = "shared"
         self.assertEqual(summary["ops_snapshot"]["freshness_label"], "尚无时间样本")
 
     def test_wechat_ipad_allow_deny_model_snapshot_helper_outputs_draft_summary(self):
-        snapshot = wechat_ipad_service._build_group_allow_deny_model_snapshot(
+        snapshot = ipad_group_governance._build_group_allow_deny_model_snapshot(
             plugin_scope_snapshot={
                 "stage_label": "可进入群级权限建模",
                 "stage_tone": "success",
@@ -4057,7 +4065,7 @@ consume_policy = "shared"
         self.assertIn("可进入建模但样本偏旧；主 blocker：群级启停模型；下一步：可进入群级权限建模", summary["plugin_scope_brief"]["decision_summary"])
 
     def test_wechat_ipad_group_plugin_blocker_priority_covers_model_categories(self):
-        enable_disable = wechat_ipad_service._build_chatroom_plugin_scope_blocker(
+        enable_disable = ipad_group_scopes._build_chatroom_plugin_scope_blocker(
             stage_key="ready_for_modeling",
             missing_capabilities=[
                 "缺群级 enable/disable 映射",
@@ -4066,7 +4074,7 @@ consume_policy = "shared"
                 "缺审计与运营动作留痕",
             ],
         )
-        allow_deny = wechat_ipad_service._build_chatroom_plugin_scope_blocker(
+        allow_deny = ipad_group_scopes._build_chatroom_plugin_scope_blocker(
             stage_key="ready_for_modeling",
             missing_capabilities=[
                 "缺 allow/deny 持久化口径",
@@ -4074,14 +4082,14 @@ consume_policy = "shared"
                 "缺审计与运营动作留痕",
             ],
         )
-        command_scope = wechat_ipad_service._build_chatroom_plugin_scope_blocker(
+        command_scope = ipad_group_scopes._build_chatroom_plugin_scope_blocker(
             stage_key="ready_for_modeling",
             missing_capabilities=[
                 "缺群级命令/能力边界模型",
                 "缺审计与运营动作留痕",
             ],
         )
-        audit = wechat_ipad_service._build_chatroom_plugin_scope_blocker(
+        audit = ipad_group_scopes._build_chatroom_plugin_scope_blocker(
             stage_key="ready_for_modeling",
             missing_capabilities=["缺审计与运营动作留痕"],
         )

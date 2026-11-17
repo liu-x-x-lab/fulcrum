@@ -13,7 +13,7 @@ os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_RUNTIME / 'app.db'}")
 import pytest
 from sqlalchemy import event, select
 
-import app.main as main_module
+import app.web.plugins.views as plugin_views
 from app.core.settings import settings
 from app.models.entities import BotPlugin, Plugin
 from app.services import plugin_directory
@@ -127,12 +127,12 @@ def test_summary_reuses_supplied_metadata_even_when_empty(monkeypatch, available
     def unexpected_lookup(*args, **kwargs):
         pytest.fail("已提供运行信息时不应重新扫描插件目录")
 
-    monkeypatch.setattr(main_module, "get_plugin_runtime_meta", unexpected_lookup)
-    monkeypatch.setattr(main_module, "get_plugin_runtime_meta_map", unexpected_lookup)
+    monkeypatch.setattr(plugin_views, "get_plugin_runtime_meta", unexpected_lookup)
+    monkeypatch.setattr(plugin_views, "get_plugin_runtime_meta_map", unexpected_lookup)
     runtime_map = {
         "demo": {"plugin_category": "functional", "migration_state": "migrated", "supports_execution": True}
     } if available else {}
-    summary = main_module.build_plugin_runtime_summary(
+    summary = plugin_views.build_plugin_runtime_summary(
         [Plugin(id=1, code="demo", display_name="示例")],
         [BotPlugin(status="enabled")],
         runtime_map=runtime_map,
@@ -160,8 +160,8 @@ def test_catalog_with_binding_does_not_prepare_detail_data_or_repeat_scans(
     def unexpected_detail_work(*args, **kwargs):
         pytest.fail("列表页不应解密绑定配置或整理详细调度记录")
 
-    monkeypatch.setattr(main_module, "decrypt_plugin_secret_config", unexpected_detail_work)
-    monkeypatch.setattr(main_module, "build_binding_dispatch_view", unexpected_detail_work)
+    monkeypatch.setattr(plugin_views, "decrypt_plugin_secret_config", unexpected_detail_work)
+    monkeypatch.setattr(plugin_views, "build_binding_dispatch_view", unexpected_detail_work)
     scans = []
     real_signature = plugin_directory._build_scan_signature
 

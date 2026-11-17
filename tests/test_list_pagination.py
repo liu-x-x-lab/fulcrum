@@ -8,8 +8,8 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import pytest
 from starlette.requests import Request
 
-import app.main as main
-from app.models.entities import Chatroom, Conversation, PointsAccount, WorkWechatContact
+from app.models.entities import Channel, Chatroom, Conversation, PointsAccount, WorkWechatContact
+from app.web.shared.urls import preserve_return_to, safe_return_to
 from test_chatroom_plugin_batch import batch_context  # noqa: F401
 from test_friend_check_routes import check_context  # noqa: F401
 from test_provider_node_pages import _login, provider_page_context  # noqa: F401
@@ -32,7 +32,7 @@ class Elements(HTMLParser):
 def paged_lists(provider_page_context):
     client, ids = provider_page_context
     with ids["factory"]() as db:
-        channel = db.get(main.Channel, ids["channel_id"])
+        channel = db.get(Channel, ids["channel_id"])
         channel.channel_type = "wechat_webridge"
         for number in range(155):
             room = Chatroom(tenant_id=ids["alpha"], bot_id=ids["bot"], channel_id=channel.id,
@@ -136,7 +136,7 @@ def test_friend_chat_and_points_ledger_keep_origin(paged_lists, monkeypatch):
 
 @pytest.mark.parametrize("value", ["https://example.com", "//example.com", "/\\example.com", "http://[", "/contacts\nunsafe"])
 def test_return_links_reject_external_or_malformed_urls(value):
-    assert main.safe_return_to(value, "/chatrooms") == "/chatrooms"
+    assert safe_return_to(value, "/chatrooms") == "/chatrooms"
 
 
 def test_plugin_form_save_and_reset_keep_list_origin_without_referer(batch_context):
@@ -165,9 +165,9 @@ def test_detail_form_redirect_keeps_only_same_origin_return_link():
     def request(origin):
         return Request({"type": "http", "method": "POST", "scheme": "http", "server": ("testserver", 80),
             "path": "/channels/1/chatrooms/2/scopes/3/mode", "query_string": b"", "headers": [(b"host", b"testserver"), (b"referer", origin.encode("ascii"))]})
-    result = main._preserve_return_to(request(referer), target)
+    result = preserve_return_to(request(referer), target)
     assert parse_qs(urlsplit(result).query)["return_to"] == [source]
-    assert main._preserve_return_to(request(referer.replace("http://testserver", "https://example.com")), target) == target
+    assert preserve_return_to(request(referer.replace("http://testserver", "https://example.com")), target) == target
 
 
 def test_browser_jump_roundtrip_and_mobile_layout(paged_lists, browser):

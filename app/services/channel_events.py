@@ -211,7 +211,8 @@ def ingest_normalized_event(
 
     if channel.channel_type == "wechat_ipad":
         from app.services.wechat_ipad.chatrooms import sync_wechat_ipad_chatroom_from_message
-        from app.services.wechat_ipad.service import should_sync_wechat_ipad_chatroom_for_event, sync_wechat_ipad_chatrooms
+        from app.services.wechat_ipad.events import should_sync_wechat_ipad_chatroom_for_event
+        from app.services.wechat_ipad.operations.sync import sync_wechat_ipad_chatrooms
 
         conversation_payload = normalized.get("conversation") or {}
         message_payload = normalized.get("message") or {}

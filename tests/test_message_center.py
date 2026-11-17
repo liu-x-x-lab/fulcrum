@@ -7,6 +7,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
+import app.web.messages.routes as message_routes
 from app.models.entities import Chatroom, ChatroomMember, Conversation, Message
 from test_provider_node_pages import _login, provider_page_context  # noqa: F401  (provider_page_context 是 fixture)
 
@@ -128,8 +129,6 @@ def test_history_requires_a_known_conversation_and_login(seeded) -> None:
 # ---------- 发送 ----------
 
 def test_send_returns_json_and_validates_content(seeded, monkeypatch) -> None:
-    import app.main as main_module
-
     client, _ids, conversation_id, message_ids, csrf = seeded
     sent: list[dict] = []
 
@@ -138,7 +137,7 @@ def test_send_returns_json_and_validates_content(seeded, monkeypatch) -> None:
         row = db.get(Message, message_ids[0])
         return row, {"ok": not payload["content"].startswith("失败"), "error_message": "手机离线"}
 
-    monkeypatch.setattr(main_module, "dispatch_outbound_message", fake_dispatch)
+    monkeypatch.setattr(message_routes, "dispatch_outbound_message", fake_dispatch)
     url = "/messages/send"
     ok = client.post(url, data={"conversation_id": conversation_id, "content": "  你好呀  ", "csrf_token": csrf})
     assert ok.status_code == 200 and ok.json()["ok"] is True and ok.json()["message_id"] == message_ids[0]

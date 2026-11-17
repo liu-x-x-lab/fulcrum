@@ -10,7 +10,7 @@ from pathlib import Path
 
 os.environ.setdefault("LOG_DIR", tempfile.mkdtemp(prefix="scope-actions-test-logs-"))
 
-MAIN = Path(__file__).resolve().parents[1] / "app" / "main.py"
+SCOPE_ROUTES = Path(__file__).resolve().parents[1] / "app/web/chatrooms/plugin_settings.py"
 
 
 def test_chatroom_scope_routes_use_principal_user_id() -> None:
@@ -20,8 +20,8 @@ def test_chatroom_scope_routes_use_principal_user_id() -> None:
     不能依赖历史接口数量，否则删除旧接口也会误报回归。
     """
 
-    source = MAIN.read_text(encoding="utf-8")
-    assert not re.search(r"\buser\.id\b", source), "main.py 中不应再有 user.id（租户身份字段是 user_id）"
+    source = SCOPE_ROUTES.read_text(encoding="utf-8")
+    assert not re.search(r"\buser\.id\b", source), "群作用域路由中不应再有 user.id（租户身份字段是 user_id）"
     tree = ast.parse(source)
     checked_routes = set()
     for node in tree.body:

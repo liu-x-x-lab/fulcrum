@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import event, select
 
+import app.web.plugins.routes as plugin_routes
 from app.core.tenant_context import tenant_scope
 from app.core.tenant_db import tenant_session
 from app.core.time import now_shanghai
@@ -211,7 +212,6 @@ def test_unsupported_period_is_rejected(usage_context):
 def test_manual_execution_records_result_and_exception_after_rollback(usage_context, monkeypatch, outcome):
     """请求成功和抛错均能留下真实记录，失败业务事务不随统计提交。"""
 
-    import app.main as main
     from app.services.plugin_runtime.contracts import PluginExecutionResult
     from test_provider_node_pages import _login
 
@@ -221,7 +221,7 @@ def test_manual_execution_records_result_and_exception_after_rollback(usage_cont
         if outcome == 'exception':
             raise RuntimeError('测试中的执行异常')
         return PluginExecutionResult(ok=outcome == 'success', status='completed' if outcome == 'success' else 'error', message='定向验收')
-    monkeypatch.setattr(main, 'execute_binding_message_action', execute)
+    monkeypatch.setattr(plugin_routes, 'execute_binding_message_action', execute)
     if outcome == 'exception':
         with pytest.raises(RuntimeError, match='测试中的执行异常'):
             client.post(f"/plugins/{ids['binding']}/execute", json={}, headers={'X-CSRF-Token': token})

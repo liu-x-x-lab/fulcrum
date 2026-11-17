@@ -18,7 +18,8 @@ from app.core.db import Base
 from app.core.tenant_context import tenant_scope
 from app.models.entities import Bot, Channel
 from app.models.saas import Tenant
-from app.services.wechat_ipad.service import resolve_wechat_ipad_qrcode_image, start_wechat_ipad_login
+from app.services.wechat_ipad.qr import resolve_wechat_ipad_qrcode_image
+from app.services.wechat_ipad.operations.login import start_wechat_ipad_login
 
 
 @pytest.fixture()

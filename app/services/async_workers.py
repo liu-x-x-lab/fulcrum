@@ -429,7 +429,7 @@ def _process_outbound_dispatch_job(db: Session, job: TaskJob, payload: dict[str,
         mark_customer_operation_dispatched(db, operation_id=operation_id, message=message, adapter_result=adapter_result)
         db.commit()
     if channel.channel_type == "wechat_ipad":
-        from app.services.wechat_ipad.service import record_wechat_ipad_send_event
+        from app.services.wechat_ipad.runtime import record_wechat_ipad_send_event
 
         record_wechat_ipad_send_event(db, channel, adapter_result=adapter_result, payload=outbound_payload)
     logger.info(

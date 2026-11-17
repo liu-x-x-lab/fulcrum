@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
-from app.main import build_channel_chatroom_summary
+from app.web.channels.views import build_channel_chatroom_summary
 from app.models.entities import Bot, BotPlugin, Channel, Chatroom, ChatroomMember, Conversation, Message, Plugin, TaskJob
 from app.services.workwechat_chatrooms import (
     build_workwechat_chatroom_detail,
