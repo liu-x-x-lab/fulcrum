@@ -130,7 +130,10 @@ def test_framework_replies_do_not_require_a_directory_plugin_binding(pages, monk
     _client, ids, _plugin_id, _binding_id = pages
     from types import SimpleNamespace
     import app.services.async_workers as worker
-    monkeypatch.setattr(worker, "dispatch_outbound_message", lambda *args: (SimpleNamespace(id=123), {"ok": True}))
+    def dispatch(*args, auto_revoke):
+        assert auto_revoke is None
+        return SimpleNamespace(id=123), {"ok": True}
+    monkeypatch.setattr(worker, "dispatch_outbound_message", dispatch)
     with ids["factory"]() as db:
         channel = db.scalar(select(Channel).where(Channel.bot_id == ids["bot"]))
         channel.channel_type = "wechat_webridge"
