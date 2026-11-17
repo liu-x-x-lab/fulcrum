@@ -1,0 +1,59 @@
+{% extends 'platform_base.html' %}
+{% block hero_actions %}
+<div class="hero-action-cluster">
+  <button class="btn" type="button" data-modal-open="create-tenant-modal">开通企业</button>
+  <a class="btn btn-secondary" href="/platform/plans">管理套餐</a>
+</div>
+{% endblock %}
+{% block content %}
+<section class="work-surface">
+  <div class="section-head">
+    <div><h2>企业清单</h2></div>
+    <span class="chip chip-outline">{{ tenants|length }} 个企业</span>
+  </div>
+  <div class="table-scroll">
+    <table class="table">
+      <thead><tr><th>企业</th><th>管理员手机号</th><th>套餐</th><th>有效期</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for tenant in tenants %}
+        {% set subscription = current_subscription(tenant) %}
+        <tr>
+          <td><strong>{{ tenant.name }}</strong></td>
+          <td>{{ tenant.contact_phone or '-' }}</td>
+          <td>{{ subscription.plan.name if subscription and subscription.plan else '-' }}</td>
+          <td>{{ format_time(subscription.expires_at) if subscription and subscription.expires_at else '长期有效' }}</td>
+          <td><span class="chip {% if tenant.status == 'active' %}chip-success{% else %}chip-muted{% endif %}">{{ '正常' if tenant.status == 'active' else '已停用' }}</span></td>
+          <td><a class="btn btn-small btn-secondary btn-icon" href="/platform/tenants/{{ tenant.id }}" title="详情" aria-label="详情"><span class="i i-chevron-right" aria-hidden="true"></span></a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6"><div class="empty-state"><strong>暂无企业</strong><p>开通企业后会显示在这里。</p></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<dialog class="app-modal" id="create-tenant-modal">
+  <div class="app-modal-card">
+    <div class="app-modal-head">
+      <div><h2>开通企业</h2></div>
+      <button class="btn btn-secondary app-modal-close" type="button" data-modal-close aria-label="关闭">×</button>
+    </div>
+    {% if plans %}
+    <form method="post" action="/platform/tenants" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <label class="full-row"><span>企业名称</span><input name="name" required maxlength="150" autocomplete="organization" placeholder="示例科技有限公司" /></label>
+      <label><span>管理员手机号</span><input name="admin_mobile" type="tel" inputmode="tel" autocomplete="tel" required /></label>
+      <label><span>套餐</span><select name="plan_id" required>{% for plan in plans %}<option value="{{ plan.id }}">{{ plan.name }} / {{ plan.bot_limit }} 个机器人</option>{% endfor %}</select></label>
+      <label><span>到期时间</span><input name="expires_on" type="date" /></label>
+      <div class="full-row form-actions-inline">
+        <button class="btn" type="submit">确认开通</button>
+        <button class="btn btn-ghost" type="button" data-modal-close><span class="i i-x" aria-hidden="true"></span><span>取消</span></button>
+      </div>
+    </form>
+    {% else %}
+    <div class="empty-state"><strong>没有可用套餐</strong><a class="btn" href="/platform/plans"><span class="i i-plus" aria-hidden="true"></span><span>创建套餐</span></a></div>
+    {% endif %}
+  </div>
+</dialog>
+{% endblock %}

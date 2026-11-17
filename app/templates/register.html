@@ -1,0 +1,23 @@
+{% extends 'auth_base.html' %}
+{% from '_auth_fields.html' import captcha_field, password_field %}
+{% block access_title_id %}register-title{% endblock %}
+{% block access_headline %}给你的业务，<br />一个全新起点。{% endblock %}
+{% block access_summary %}创建企业，即可体验 7 天智能机器人服务。{% endblock %}
+{% block content %}
+<div class="access-heading">
+  <span class="access-entry-label">免费试用 7 天 · 含 1 个机器人额度</span>
+  <h1 id="register-title">创建企业账号</h1>
+  <p>用一个工作台，连接你的团队与客户。</p>
+</div>
+{# 相关字段成组排列；验证码令牌及全部字段名保持现有服务端契约，不新增注册路径。 #}
+<form method="post" action="/register" class="form-grid auth-form-grid access-register-form">
+  <label class="access-field" for="register-enterprise-name"><span>企业名称</span><input id="register-enterprise-name" name="enterprise_name" autocomplete="organization" value="{{ form_values.enterprise_name or '' }}" maxlength="150" required /></label>
+  <label class="access-field" for="register-contact-name"><span>联系人</span><input id="register-contact-name" name="contact_name" autocomplete="name" value="{{ form_values.contact_name or '' }}" maxlength="100" required /></label>
+  <label class="access-field full-row" for="register-mobile"><span>手机号</span><input id="register-mobile" name="mobile" type="tel" autocomplete="tel" inputmode="tel" value="{{ form_values.mobile or '' }}" placeholder="作为企业所有者登录账号" required /></label>
+  {{ password_field('register-password', autocomplete='new-password', minlength=8) }}
+  {{ password_field('register-confirm-password', name='confirm_password', label='确认密码', autocomplete='new-password', minlength=8) }}
+  {{ captcha_field('register-captcha', captcha_refresh_url, captcha_token, captcha_image, true) }}
+  <div class="full-row auth-form-actions"><button class="btn auth-submit" type="submit">创建企业并开始试用 <span aria-hidden="true">→</span></button></div>
+</form>
+<p class="access-switch">已有企业账号？<a href="/login">立即登录 <span aria-hidden="true">↗</span></a></p>
+{% endblock %}

@@ -1,0 +1,24 @@
+[plugin]
+code = "group_virtual"
+display_name = "群虚拟"
+plugin_type = "observer"
+version = "2.0.0"
+author = "abot"
+description = "将当前机器人管理的多个群连接为跨渠道群桥"
+default_enabled = false
+
+[capability]
+channel_types = ["wechat_ipad", "wechat_winauto", "telegram", "openclaw", "simulator", "workwechat", "wechat_webridge", "wechat_gugatool"]
+chat_types = ["group"]
+message_types = ["text"]
+priority = 100
+consume_policy = "continue"
+timeout_ms = 12000
+
+[matcher]
+commands = ["创建跨群", "添加群", "查看跨群列表", "查看跨群", "退出跨群", "解散跨群"]
+require_mention = false
+
+[runtime]
+admin_user_ids = []
+prefix_template = "[群桥] {sender} 来自 {group}："

@@ -1,0 +1,108 @@
+{% extends 'base.html' %}
+{% from '_identity.html' import identity %}
+{# 群管理:所有账号的群合在一起。一行一个群,点整行进入群页面,启用/停用直接在行内完成。 #}
+{% block hero_actions %}
+<div class="chip-row">
+  {% include '_directory_sync.html' %}
+  <a class="btn btn-secondary" href="/chatrooms/plugin-scopes"><span class="i i-puzzle" aria-hidden="true"></span><span>群插件批量管理</span></a>
+  <span class="chip chip-outline">共 {{ directory.summary.total }} 个群</span>
+  <span class="chip chip-success">已启用 {{ directory.summary.enabled }}</span>
+  {% if directory.summary.pending %}<span class="chip chip-muted">待启用 {{ directory.summary.pending }}</span>{% endif %}
+</div>
+{% endblock %}
+{% block content %}
+<section class="work-surface">
+  <form method="get" action="/chatrooms" class="compact-filter-form" style="margin-bottom:12px;">
+    <label class="compact-filter-field"><span>搜索</span><input type="search" name="q" value="{{ directory.keyword }}" placeholder="群名称或备注" /></label>
+    {% if channels|length > 1 %}
+    <label class="compact-filter-field"><span>账号</span>
+      <select name="channel_id">
+        <option value="0">全部</option>
+        {% for item in channels %}<option value="{{ item.id }}" {% if directory.channel_id == item.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <label class="compact-filter-field"><span>状态</span>
+      <select name="status">
+        <option value="">全部</option>
+        <option value="enabled" {% if directory.status == 'enabled' %}selected{% endif %}>正常运行</option>
+        <option value="discovered" {% if directory.status == 'discovered' %}selected{% endif %}>待启用</option>
+        <option value="disabled" {% if directory.status == 'disabled' %}selected{% endif %}>只采集消息</option>
+        <option value="archived" {% if directory.status == 'archived' %}selected{% endif %}>已关闭</option>
+        <option value="left" {% if directory.status == 'left' %}selected{% endif %}>已退出</option>
+      </select>
+    </label>
+    <div class="compact-filter-actions">
+      <button class="btn btn-icon" type="submit" title="搜索" aria-label="搜索"><span class="i i-search" aria-hidden="true"></span></button>
+      {% if directory.keyword or directory.channel_id or directory.status %}<a class="btn btn-secondary btn-icon" href="/chatrooms" title="清除" aria-label="清除"><span class="i i-x" aria-hidden="true"></span></a>{% endif %}
+    </div>
+  </form>
+
+  {% if directory.rows %}
+  <div class="table-scroll">
+  <table class="table">
+    <thead><tr><th>群</th>{% if channels|length > 1 %}<th>账号</th>{% endif %}<th class="col-compact">成员</th><th class="col-time">最近动态</th><th class="col-action">机器人</th></tr></thead>
+    <tbody>
+      {% for item in directory.rows %}
+      <tr>
+        <td><a href="/channels/{{ item.channel_id }}/chatrooms/{{ item.id }}" style="text-decoration:none;color:inherit;">{{ identity(item.identity, 'lg') }}</a></td>
+        {% if channels|length > 1 %}<td class="muted-text">{{ item.channel_name }}</td>{% endif %}
+        <td class="col-compact">{{ item.member_count or '-' }}</td>
+        <td class="col-time">{{ item.last_seen_at|bj_time if item.last_seen_at else '-' }}</td>
+        <td class="col-action">
+          {# 一行控件(.row-controls):状态标签、开关、设置按钮垂直居中、高度统一;靠右对齐,标签隐藏时开关和按钮位置不变。 #}
+          <div class="row-controls">
+          {% if item.is_left %}
+          {# bot 已不在这个群里(退群或被移出):功能已暂停,没有启用开关;重新加入后会自动恢复。 #}
+          <span class="chip badge-error" title="机器人已不在这个群里（退群或被移出），功能已暂停；重新加入后自动恢复">已退出</span>
+          {% else %}
+          <span class="chip chip-muted" data-mode-chip{% if item.is_active %} hidden{% endif %}>{{ '已关闭' if item.management_status == 'archived' else '只采集' }}</span>
+          {% endif %}
+          {% if not item.is_left %}
+          {# 启用开关:点击即保存(开 = 正常运行,关 = 只采集消息);三档运行模式进入群页面设置。 #}
+          <span class="ui-switch" title="启用后机器人才会在这个群里工作">
+            <input type="checkbox" role="switch" aria-label="启用 {{ item.name }}" data-autosave-url="/channels/{{ item.channel_id }}/chatrooms/{{ item.id }}/management" data-autosave-key="management_status" data-autosave-on="enabled" data-autosave-off="disabled" data-autosave-form="{}"{% if item.is_active %} checked{% endif %} />
+            <span class="ui-switch-track"></span>
+          </span>
+          {% endif %}
+          <a class="btn btn-small btn-secondary" href="/channels/{{ item.channel_id }}/chatrooms/{{ item.id }}"><span class="i i-settings" aria-hidden="true"></span><span>设置</span></a>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% include '_pager.html' %}
+  {% else %}
+  <p class="muted-text">{{ '没有匹配的群。' if directory.keyword or directory.status or directory.channel_id else '还没有群。接入账号并同步后,群会出现在这里。' }}</p>
+  {% if not (directory.keyword or directory.status or directory.channel_id) %}<a class="btn" href="/channels"><span class="i i-plus" aria-hidden="true"></span><span>去接入账号</span></a>{% endif %}
+  {% endif %}
+</section>
+
+{# 还没收到消息的群可以先手工登记;登记后默认待启用,是低频操作,所以折叠。 #}
+{% if channels %}
+<details class="work-surface disclosure">
+  <summary>手动登记群</summary>
+  <form method="post" action="/chatrooms/create" class="form-grid" style="margin-top:12px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <label><span>账号</span><select name="channel_id">{% for item in channels %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label>
+    <label><span>群 ID</span><input name="external_id" placeholder="例如:123456@chatroom" required /></label>
+    <label><span>群名称</span><input name="name" placeholder="例如:运营群" /></label>
+    <div class="full-row"><button class="btn" type="submit"><span class="i i-plus" aria-hidden="true"></span><span>登记</span></button></div>
+  </form>
+</details>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+  // 启用开关保存成功后同步行内的"只采集/已关闭"标签。
+  document.addEventListener('autosave:done', (event) => {
+    const chip = event.target.closest('td').querySelector('[data-mode-chip]');
+    if (!chip) return;
+    const mode = event.detail.response.management_status;
+    chip.hidden = mode === 'enabled';
+    chip.textContent = mode === 'archived' ? '已关闭' : '只采集';
+  });
+</script>
+{% endblock %}

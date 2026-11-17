@@ -1,0 +1,17 @@
+{# 公共发送策略由平台执行，字段不属于某个插件的 schema；隐藏区间仍提交以保留设置。 #}
+<section class="plugin-delivery-settings config-section full-row" data-revoke-settings>
+  <h4>回复自动撤回</h4>
+  {% if delivery.supported is defined and not delivery.supported %}<p class="field-hint">当前渠道暂不支持自动撤回，可先保存设置。</p>{% endif %}
+  <div class="config-flow">
+    <label class="gf-row switch-field config-switch full-row">
+      <span class="gf-row-label">自动撤回插件回复<small class="field-hint">文字、图片等每条回复独立计时。</small></span>
+      <span class="ui-switch ui-switch-small"><input type="hidden" name="delivery__revoke_enabled" value="false" /><input type="checkbox" name="delivery__revoke_enabled" value="true" role="switch"{% if delivery.enabled %} checked{% endif %} /><span class="ui-switch-track"></span></span>
+    </label>
+    <div class="plugin-revoke-range" data-revoke-range{% if not delivery.enabled %} hidden{% endif %}>
+      <label class="config-field config-field-short"><span>最短等待（秒）</span><input type="number" name="delivery__revoke_min_seconds" value="{{ delivery.min_seconds }}" min="1" max="{{ delivery.maximum }}" step="1" required /></label>
+      <span class="plugin-revoke-range-separator" aria-hidden="true">—</span>
+      <label class="config-field config-field-short"><span>最长等待（秒）</span><input type="number" name="delivery__revoke_max_seconds" value="{{ delivery.max_seconds }}" min="1" max="{{ delivery.maximum }}" step="1" required /></label>
+    </div>
+  </div>
+  <p class="field-hint">发送成功后，在区间内随机等待再撤回；填相同秒数可固定延时。支持微桥、咕嘎的撤回能力，其他渠道暂不执行。倒计时仅存内存，服务重启后丢弃。</p>
+</section>

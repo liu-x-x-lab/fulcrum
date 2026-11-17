@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+{% from '_plugin_usage.html' import usage_toolbar, usage_card %}
+{# 插件目录使用较大的功能卡片，让名称、真实版本和完整功能介绍在列表里即可读。
+   按机器人启停、绑定和配置仍由详情页承接；卡片只提供对应入口和必要的清单异常。 #}
+{% block hero_actions %}
+<div class="hero-action-cluster">
+  <form method="post" action="/plugins/refresh" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <button class="btn btn-secondary btn-icon" type="submit" title="重新扫描插件目录" aria-label="重新扫描插件目录"><span class="i i-refresh" aria-hidden="true"></span></button>
+  </form>
+  <a class="btn btn-secondary" href="/plugins/runtime" title="查看插件运行状态"><span class="i i-activity" aria-hidden="true"></span><span>运行状态</span></a>
+</div>
+{% endblock %}
+{% block content %}
+{# 网格卡片直接放在工作区背景上，避免白色大面板里再叠一层卡片阴影。 #}
+<section class="plugin-page" data-plugin-usage data-usage-url="/plugins/usage">
+  {# 单行筛选条在窄屏自动换行；空值选项写明筛选维度，避免四个“全部”难以辨认。 #}
+  <form method="get" action="/plugins" class="inline-form plugin-filter">
+    <label class="plugin-filter-search"><span class="i i-search" aria-hidden="true"></span><input type="search" name="q" value="{{ plugin_filters.q }}" placeholder="搜索名称、编码、描述、作者" aria-label="搜索插件" /></label>
+    <select name="plugin_type" aria-label="插件类型">{% for value, label in plugin_filter_options.plugin_types %}<option value="{{ value }}" {% if plugin_filters.plugin_type == value %}selected{% endif %}>{{ label if value else '全部类型' }}</option>{% endfor %}</select>
+    <select name="category" aria-label="分类">{% for value, label in plugin_filter_options.categories %}<option value="{{ value }}" {% if plugin_filters.category == value %}selected{% endif %}>{{ label if value else '全部分类' }}</option>{% endfor %}</select>
+    <select name="execution_state" aria-label="执行能力">{% for value, label in plugin_filter_options.execution_states %}<option value="{{ value }}" {% if plugin_filters.execution_state == value %}selected{% endif %}>{{ label if value else '全部执行能力' }}</option>{% endfor %}</select>
+    <select name="manifest_state" aria-label="清单状态">{% for value, label in plugin_filter_options.manifest_states %}<option value="{{ value }}" {% if plugin_filters.manifest_state == value %}selected{% endif %}>{{ label if value else '全部清单状态' }}</option>{% endfor %}</select>
+    <button class="btn btn-icon" type="submit" title="筛选" aria-label="筛选"><span class="i i-filter" aria-hidden="true"></span></button>
+    <a class="btn btn-secondary btn-icon" href="/plugins" title="清除筛选" aria-label="清除筛选"><span class="i i-x" aria-hidden="true"></span></a>
+    <span class="plugin-filter-count">{{ filtered_plugin_count }} / {{ total_plugin_count }}</span>
+  </form>
+
+  {{ usage_toolbar('本企业') }}
+  {% if plugins %}
+  <div class="plugin-grid" data-usage-grid>
+    {% for plugin in plugins %}
+    {% set runtime_info = plugin_runtime_map.get(plugin.code, {}) %}
+    <article class="plugin-card{% if runtime_info.manifest_errors %} is-broken{% endif %}" data-usage-card>
+      <header class="plugin-card-head">
+        <span class="plugin-card-icon" aria-hidden="true">{{ plugin.display_name[:1] }}</span>
+        <div class="plugin-card-copy">
+          <h3><a href="/plugins/{{ plugin.id }}">{{ plugin.display_name }}</a></h3>
+          {# 版本直接取当前目录记录；未声明时明确提示，避免把占位值展示成真实版本。 #}
+          <div class="plugin-card-meta"><span class="plugin-card-version"{% if plugin.version %} aria-label="版本 {{ plugin.version }}"{% endif %}>{{ 'v' ~ plugin.version if plugin.version else '版本未声明' }}</span></div>
+        </div>
+      </header>
+      {# 功能介绍按原文自然换行，不再依赖悬停提示读取被截断的内容。 #}
+      <p class="plugin-card-description">{{ plugin.description or '暂未提供功能介绍。' }}</p>
+      {% if runtime_info.manifest_errors %}
+      <p class="plugin-card-warning">暂不可用 · {{ runtime_info.manifest_errors|join('；') }}</p>
+      {% elif runtime_info.manifest_warnings %}
+      <p class="plugin-card-warning">有提示 · {{ runtime_info.manifest_warnings|join('；') }}</p>
+      {% endif %}
+      {{ usage_card(plugin.code, plugin.display_name) }}
+      <footer class="plugin-card-footer">
+        {% if plugin.author %}<span class="plugin-card-author">开发者 · {{ plugin.author }}</span>{% endif %}
+        <div class="plugin-card-actions">
+          <a class="btn btn-small btn-secondary btn-icon" href="/plugins/{{ plugin.id }}" title="配置 {{ plugin.display_name }}" aria-label="配置 {{ plugin.display_name }}"><span class="i i-sliders" aria-hidden="true"></span></a>
+          {% if runtime_info.admin_extension and runtime_info.admin_extension.enabled and not runtime_info.manifest_errors %}
+          <a class="btn btn-small btn-secondary btn-icon" href="{{ runtime_info.admin_extension.base_path }}" title="{{ runtime_info.admin_extension.title }}" aria-label="{{ runtime_info.admin_extension.title }}"><span class="i i-external" aria-hidden="true"></span></a>
+          {% endif %}
+        </div>
+      </footer>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="notice-card">
+    <strong>没有符合条件的插件</strong>
+    <p>可以清除筛选条件，或点右上角的刷新图标重新扫描插件目录。</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}<script src="/static/js/plugin-usage.js" defer></script>{% endblock %}

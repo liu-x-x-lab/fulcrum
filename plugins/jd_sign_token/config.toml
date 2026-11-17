@@ -1,0 +1,33 @@
+[plugin]
+code = "jd_sign_token"
+display_name = "京东签到令牌"
+plugin_type = "command"
+version = "2.0.0"
+author = "abot"
+description = "将用户私聊提交的京东 Cookie 写入租户自己的青龙面板"
+default_enabled = false
+
+[capability]
+# Cookie 只能通过私聊提交，避免群聊成员看到其他用户的京东凭证。
+channel_types = ["wechat_ipad", "wechat_winauto", "telegram", "openclaw", "simulator", "workwechat", "wechat_webridge", "wechat_gugatool"]
+chat_types = ["direct"]
+message_types = ["text"]
+priority = 100
+# `stop` 只在插件成功处理后截断后续候选，失败时仍允许其他插件继续执行。
+consume_policy = "stop"
+timeout_ms = 65000
+
+[matcher]
+commands = ["设置京东"]
+require_mention = false
+
+[secrets]
+# 青龙开放接口凭证由每个租户自行维护，平台只在执行时解密到内存。
+fields = ["client_id", "client_secret"]
+
+[runtime]
+ql_host = ""
+client_id = ""
+client_secret = ""
+env_name = "JD_COOKIE"
+timeout_seconds = 15

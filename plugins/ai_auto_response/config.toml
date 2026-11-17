@@ -1,0 +1,41 @@
+[plugin]
+code = "ai_auto_response"
+display_name = "AI自动回复"
+plugin_type = "ai"
+version = "2.0.0"
+author = "abot"
+description = "由租户自备 AI 服务驱动的群聊自动参与插件"
+default_enabled = false
+
+[capability]
+# 所有渠道都使用平台标准文本事件和标准文本回复，不绑定某一个协议实现。
+channel_types = ["wechat_ipad", "wechat_winauto", "telegram", "openclaw", "simulator", "workwechat", "wechat_webridge", "wechat_gugatool"]
+chat_types = ["group"]
+message_types = ["text"]
+priority = 140
+consume_policy = "continue"
+timeout_ms = 25000
+
+[matcher]
+# 自动参与不是手工命令。普通命令仍由对应业务插件独立处理。
+commands = []
+require_mention = false
+
+[secrets]
+fields = ["api_key"]
+
+[runtime]
+# 外部 AI 成本由租户承担，平台不提供共享地址或共享密钥回退。
+api_base = ""
+api_key = ""
+app_mode = "workflow"
+request_timeout_seconds = 20
+# 近期消息只从平台标准运行载荷读取，不允许插件绕开租户会话自行查询数据库。
+history_limit = 30
+min_text_length = 2
+allow_proactive_reply = true
+persona_name = "小牛"
+persona_style = "自然、简短、像群友，先给判断再决定是否延伸"
+max_reply_chars = 120
+ignore_prefixes = ["/", "#"]
+ignore_exact = ["收到", "好的", "嗯", "哦", "6", "1", "？", "?"]

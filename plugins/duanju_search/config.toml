@@ -1,0 +1,29 @@
+[plugin]
+code = "duanju_search"
+display_name = "短剧搜索"
+plugin_type = "command"
+version = "2.0.0"
+author = "abot"
+description = "通过租户搜索服务查询短剧观看链接"
+default_enabled = false
+
+[capability]
+channel_types = ["wechat_ipad", "wechat_winauto", "telegram", "openclaw", "simulator", "workwechat", "wechat_webridge", "wechat_gugatool"]
+chat_types = ["direct", "group"]
+message_types = ["text"]
+priority = 100
+consume_policy = "continue"
+timeout_ms = 30000
+
+[matcher]
+commands = ["短剧", "短剧搜索", "搜索短剧", "短剧查询"]
+require_mention = false
+
+[secrets]
+fields = ["api_key"]
+
+[runtime]
+api_url = ""
+api_key = ""
+result_limit = 3
+timeout_seconds = 15

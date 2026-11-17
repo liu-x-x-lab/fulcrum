@@ -1,0 +1,19 @@
+{% extends 'auth_base.html' %}
+{% from '_auth_fields.html' import captcha_field, password_field %}
+{% block access_title_id %}enterprise-login-title{% endblock %}
+{% block content %}
+<div class="access-heading">
+  <span class="access-entry-label">企业工作台</span>
+  <h1 id="enterprise-login-title">欢迎回来</h1>
+  <p>登录账号，开始今天的工作。</p>
+</div>
+{# 企业身份只由手机号恢复，表单不接收租户编码；标签与输入同组，避免重复网格留白。 #}
+<form method="post" action="/login" class="form-grid auth-form-grid">
+  <label class="access-field" for="enterprise-mobile"><span>手机号</span><input id="enterprise-mobile" name="mobile" type="tel" autocomplete="username" inputmode="tel" value="{{ prefill_mobile or '' }}" placeholder="请输入手机号" required /></label>
+  {{ password_field('enterprise-password') }}
+  {{ captcha_field('enterprise-captcha', captcha_refresh_url, captcha_token, captcha_image) }}
+  <div class="auth-form-actions"><button class="btn auth-submit" type="submit">登录工作台 <span aria-hidden="true">→</span></button></div>
+</form>
+<p class="access-switch">还没有企业账号？<a href="/register">免费试用 7 天 <span aria-hidden="true">↗</span></a></p>
+<p class="access-identity">企业所有者与员工均使用手机号登录</p>
+{% endblock %}

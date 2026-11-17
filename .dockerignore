@@ -1,0 +1,30 @@
+.git
+.idea
+.run
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+# 环境文件由 Compose 在容器启动时注入，禁止复制进包含历史层的应用镜像。
+.env
+.env.docker
+# SSH 与内网 Git 凭据只在部署控制端读取，不能随应用重建进入镜像层。
+.env.deploy
+logs
+data
+tmp
+memory
+# 本地备份(含数据库导出)、工具会话和内部文档不进入镜像构建上下文。
+backups
+.rcodex
+projects
+sessions
+shell-snapshots
+session-env
+AGENTS.md
+TODO.md
+docs/plans
+docs/superpowers
+docs/reports

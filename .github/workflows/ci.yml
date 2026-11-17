@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # 应用以服务器系统时区作为业务时间,生产要求 Asia/Shanghai(见 docker-compose.yml),测试同样依赖它
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Syntax check
+        run: python -m compileall -q app plugins scripts migrations
+      # 在导入插件之前检查交付契约与统一截图规范，辅助 Python 模块也必须通过。
+      - name: Plugin delivery policy
+        run: python -m scripts.verify_plugin_migration
+      - name: Action feedback script
+        run: node tests/action_feedback.test.cjs
+      # CI 只运行清单中明确选择的功能与契约测试，保持逐文件进程隔离。
+      # 移动回归用例时同步更新清单，不能因文件改名而丢失已选覆盖。
+      - name: Friend check browser logic
+        run: node --check app/static/js/contact-check.js && node --test tests/contact_check_persistence.test.cjs
+      - name: Tests
+        env:
+          JOBS: "4"
+        run: scripts/run_tests_isolated.sh .github/ci-test-files.txt

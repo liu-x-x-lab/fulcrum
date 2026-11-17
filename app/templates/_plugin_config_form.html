@@ -1,0 +1,58 @@
+{# 插件配置表单:字段来自清单 v2 的 [[config.fields]] 声明(中文标签、说明、范围、分组、下拉选项);
+   没有声明的插件按默认值推断。保存由 plugin_schemas.merge_schema_config 处理,字段名统一是 schema__<key>。 #}
+{% if config_view.mode == 'schema' %}
+{% for field in config_view.fields %}
+{# 分组必须包含自己的字段，不能只插入标题后继续混排；保持声明顺序，不改保存字段或筛选敏感项的路径。 #}
+{% if loop.first or field.group != loop.previtem.group %}
+{% if not loop.first %}</div></section>{% endif %}
+<section class="config-section full-row" data-config-group="{{ field.group }}">
+  {% if field.group %}<h4>{{ field.group }}</h4>{% endif %}
+  <div class="config-flow">
+{% endif %}
+{% if field.field_type == 'boolean' %}
+{# 开关:未勾选时由前面的隐藏域提交 false,勾选后同名字段在后,取最后一个。 #}
+<label class="gf-row switch-field config-switch full-row"{% if field.depends_on %} data-gf-depends="schema__{{ field.depends_on }}"{% endif %}>
+  <span class="gf-row-label">{{ field.label }}{% if field.description %}<small class="field-hint">{{ field.description }}</small>{% endif %}</span>
+  <span class="ui-switch ui-switch-small"><input type="hidden" name="schema__{{ field.name }}" value="false" /><input type="checkbox" name="schema__{{ field.name }}" value="true" role="switch"{% if field.value %} checked{% endif %} /><span class="ui-switch-track"></span></span>
+</label>
+{% else %}
+{# 数字、时间和短选项只在本组内自然排列；文本独占一行，避免背景图地址挤开经验上下限等相关字段。 #}
+<label class="config-field{% if field.field_type in ('number', 'time') %} config-field-numeric{% endif %}{% if field.field_type in ('number', 'time', 'select') and field.render_value|length <= 80 %} config-field-short{% else %} full-row config-field-wide{% endif %}"{% if field.depends_on %} data-gf-depends="schema__{{ field.depends_on }}"{% endif %}>
+  <span>{{ field.label }}{% if field.required and not field.sensitive %}<em class="field-required" title="必填">*</em>{% endif %}</span>
+  {% if field.field_type == 'select' %}
+  {% if field.options|length > 12 %}<span class="config-suggestions" data-config-suggestions data-placeholder="{{ field.placeholder }}">{% endif %}
+  <select name="schema__{{ field.name }}">
+    {% for option in field.options %}
+    <option value="{{ option.value }}" {% if field.value == option.value %}selected{% endif %}>{{ option.label }}</option>
+    {% endfor %}
+  </select>
+  {% if field.options|length > 12 %}</span>{% endif %}
+  {% elif field.field_type == 'textarea' %}
+  <textarea name="schema__{{ field.name }}" rows="4" placeholder="{{ field.placeholder }}">{{ field.render_value }}</textarea>
+  {% else %}
+  <input
+    type="{% if field.field_type == 'password' %}password{% elif field.field_type == 'number' %}number{% elif field.field_type == 'url' %}url{% elif field.field_type == 'time' %}time{% else %}text{% endif %}"
+    name="schema__{{ field.name }}"
+    value="{{ field.render_value }}"
+    placeholder="{% if field.sensitive %}留空保持现有配置{% else %}{{ field.placeholder }}{% endif %}"
+    {% if field.field_type == 'number' %}step="any"{% if field.minimum is not none %} min="{{ field.minimum }}"{% endif %}{% if field.maximum is not none %} max="{{ field.maximum }}"{% endif %}{% endif %}
+    {% if field.required and not field.sensitive %}required{% endif %}
+    {% if field.sensitive %}autocomplete="new-password"{% endif %}
+  />
+  {% endif %}
+  {% if field.sensitive %}
+  <small>{% if field.description %}{{ field.description }}　{% endif %}当前状态：{% if field.secret_configured %}已配置{% else %}未配置{% endif %}</small>
+  {% if field.secret_configured %}
+  <span class="check-option"><input type="checkbox" name="schema_clear__{{ field.name }}" value="true" /> 清除已保存配置</span>
+  {% endif %}
+  {% else %}
+  {% if field.description %}<small>{{ field.description }}</small>{% endif %}
+  {% endif %}
+</label>
+{% endif %}
+{% if loop.last %}</div></section>{% endif %}
+{% endfor %}
+{% else %}
+<section class="config-section full-row"><label class="config-field config-field-wide"><span>配置 JSON</span><textarea name="config_json" rows="4">{{ config_view.raw_config_json }}</textarea></label></section>
+{% endif %}
+{% if config_view.delivery %}{% with delivery=config_view.delivery %}{% include '_plugin_delivery_settings.html' %}{% endwith %}{% endif %}

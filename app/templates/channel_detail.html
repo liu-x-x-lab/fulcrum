@@ -1,0 +1,244 @@
+{% extends 'base.html' %}
+{% block back %}<a class="page-back" href="/channels" title="返回账号清单" aria-label="返回账号清单"><span class="i i-arrow-left" aria-hidden="true"></span></a>{% endblock %}
+{% from '_identity.html' import identity %}
+{% from '_account_presence.html' import account_presence %}
+{% macro tone_chip(label, tone) -%}
+<span class="chip {% if tone == 'muted' %}chip-muted{% elif tone == 'success' %}chip-success{% else %}chip-outline{% endif %}">{{ label }}</span>
+{%- endmacro %}
+
+{% block hero_actions %}
+<div class="hero-action-cluster">
+  {% if channel.channel_type == 'wechat_ipad' and can_manage_channel %}
+  <a class="btn" href="/channels/{{ channel.id }}/wechat-ipad/login-session"><span class="i i-refresh" aria-hidden="true"></span><span>重新登录</span></a>
+  {% endif %}
+  {% if can_manage_channel %}
+  <button class="btn btn-secondary" type="button" data-modal-open="edit-channel-modal"><span class="i i-settings" aria-hidden="true"></span><span>账号设置</span></button>
+  {% endif %}
+  {% if channel.channel_type == 'wechat_webridge' %}
+  {% if can_manage_channel %}<a class="btn btn-secondary" href="/channels/connect?channel_id={{ channel.id }}">{% if channel.is_enabled %}查看连接地址{% else %}继续接入{% endif %}</a>{% endif %}
+  <a class="btn" href="/channels/{{ channel.id }}/wechat-webridge"><span class="i i-external" aria-hidden="true"></span><span>微桥后台</span></a>
+  <a class="btn btn-secondary" href="/chatrooms?channel_id={{ channel.id }}"><span class="i i-users" aria-hidden="true"></span><span>群管理</span></a>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+<section class="work-surface">
+  <div class="toolbar">
+    <div>
+      {{ identity(account, 'lg') }}
+    </div>
+    <div class="actions">
+      {# iPad 登录状态由扫码业务流维护，租户详情页不再提供协议级健康检查。 #}
+      {% if channel.channel_type != 'wechat_ipad' %}
+      <form method="post" action="/channels/{{ channel.id }}/health-check" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button class="btn btn-secondary" type="submit"><span class="i i-activity" aria-hidden="true"></span><span>检查连接</span></button>
+      </form>
+      {% endif %}
+      {% if can_manage_channel %}
+      <form method="post" action="/channels/{{ channel.id }}/toggle">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button class="btn" type="submit">{{ '停用账号' if channel.is_enabled else '启用账号' }}</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  {# 状态信息压缩为一行标签,避免占用首屏。 #}
+  <div class="chip-row">
+    <span class="chip {% if channel.is_enabled %}chip-success{% else %}chip-muted{% endif %}">{{ connection.label }}</span>
+    <span class="chip chip-outline">{{ channel.channel_type|channel_type_label }}</span>
+    <span class="chip chip-outline">机器人 {{ bot_name_map.get(channel.bot_id, '机器人') }}</span>
+    <span class="chip chip-outline">额度 {{ '已占用' if binding and binding.status == 'active' else '未占用' }} · 余额 {{ quota.remaining if quota else '-' }}</span>
+    {{ account_presence(presence) }}
+  </div>
+  {% if quota_error %}<p class="notice-card notice-card-danger" aria-live="polite">{{ quota_error }}</p>{% endif %}
+</section>
+
+{% if channel.channel_type == 'wechat_ipad' and wechat_ipad_overview %}
+<section class="work-surface account-business-summary">
+  <div class="toolbar">
+    <div>
+
+      <h2>微信账号</h2>
+    </div>
+    {% if can_manage_channel %}<a class="btn btn-secondary" href="/channels/{{ channel.id }}/wechat-ipad/login-session"><span class="i i-refresh" aria-hidden="true"></span><span>重新登录</span></a>{% endif %}
+  </div>
+  <div class="stats-grid compact-grid">
+    <div class="metric-item"><span>登录状态</span><strong>{{ '已登录' if wechat_ipad_overview.login_state == 'online' or wechat_ipad_overview.qrcode_status == 'success' else '未登录' }}</strong></div>
+    <div class="metric-item"><span>账号昵称</span><strong>{{ wechat_ipad_overview.nickname or channel.name }}</strong></div>
+    <div class="metric-item"><span>微信号</span><strong>{{ wechat_ipad_overview.alias or '-' }}</strong></div>
+    <div class="metric-item"><span>绑定手机</span><strong>{{ wechat_ipad_overview.bind_mobile or '-' }}</strong></div>
+  </div>
+  <div class="form-actions-inline top-gap">
+    <form method="post" action="/channels/{{ channel.id }}/wechat-ipad/sync-contacts" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button class="btn btn-secondary" type="submit"><span class="i i-refresh" aria-hidden="true"></span><span>同步联系人</span></button>
+    </form>
+    <form method="post" action="/channels/{{ channel.id }}/wechat-ipad/sync-chatrooms" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button class="btn btn-secondary" type="submit"><span class="i i-refresh" aria-hidden="true"></span><span>同步群聊</span></button>
+    </form>
+    <a class="btn btn-ghost" href="/chatrooms?channel_id={{ channel.id }}"><span class="i i-users" aria-hidden="true"></span><span>群管理</span></a>
+  </div>
+</section>
+{% endif %}
+
+{% if channel.channel_type == 'workwechat' %}
+<section class="work-surface">
+  <div class="toolbar">
+    <div><h2>企业微信账号</h2></div>
+    <div class="actions">
+      <form method="post" action="/channels/{{ channel.id }}/workwechat/sync-chatrooms" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><button class="btn btn-secondary" type="submit"><span class="i i-refresh" aria-hidden="true"></span><span>同步群聊</span></button></form>
+      <form method="post" action="/channels/{{ channel.id }}/workwechat/sync-contacts" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><button class="btn btn-secondary" type="submit"><span class="i i-refresh" aria-hidden="true"></span><span>同步联系人</span></button></form>
+      <a class="btn btn-ghost" href="/chatrooms?channel_id={{ channel.id }}"><span class="i i-users" aria-hidden="true"></span><span>群管理</span></a>
+      <a class="btn btn-ghost" href="/channels/{{ channel.id }}/workwechat/contacts"><span class="i i-user" aria-hidden="true"></span><span>联系人</span></a>
+    </div>
+  </div>
+  <div class="stats-grid compact-grid">
+    <div class="metric-item"><span>企业微信客户端</span><strong>{{ channel.provider_node.name if channel.provider_node else '未连接' }}</strong></div>
+    <div class="metric-item"><span>在线账号</span><strong>{{ (channel.provider_account.display_name or channel.provider_account.account_key) if channel.provider_account else '未绑定' }}</strong></div>
+  </div>
+</section>
+{% elif channel.channel_type == 'wechat_winauto' %}
+<section class="work-surface">
+  <div class="toolbar">
+    <div><h2>微信客户端</h2></div>
+    <div class="actions">
+      <form method="post" action="/channels/{{ channel.id }}/wechat-winauto/sync-chatrooms" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><button class="btn btn-secondary" type="submit"><span class="i i-refresh" aria-hidden="true"></span><span>同步群聊</span></button></form>
+      <a class="btn btn-ghost" href="/chatrooms?channel_id={{ channel.id }}"><span class="i i-users" aria-hidden="true"></span><span>群管理</span></a>
+    </div>
+  </div>
+</section>
+{% elif channel.channel_type == 'wechat_gugatool' %}
+<section class="work-surface">
+  <div class="toolbar">
+    <div><h2>咕嘎助手账号</h2></div>
+    <div class="actions">
+      {% if can_manage_channel %}
+      <form method="post" action="/channels/{{ channel.id }}/wechat-gugatool/sync-friends">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button class="btn btn-secondary" type="submit"><span class="i i-refresh" aria-hidden="true"></span><span>同步好友</span></button>
+      </form>
+      {% endif %}
+      <a class="btn btn-ghost" href="/contacts?channel_id={{ channel.id }}"><span class="i i-user" aria-hidden="true"></span><span>好友</span></a>
+      <a class="btn btn-ghost" href="/chatrooms?channel_id={{ channel.id }}"><span class="i i-users" aria-hidden="true"></span><span>群管理</span></a>
+    </div>
+  </div>
+  <div class="stats-grid compact-grid">
+    <div class="metric-item"><span>手机端</span><strong>{{ '已连接' if channel.is_enabled else '未连接' }}</strong></div>
+    <div class="metric-item"><span>账号昵称</span><strong>{{ account.name or '-' }}</strong></div>
+  </div>
+  <p class="muted-text top-gap">好友资料由手机端通讯录回传；手机在线时点「同步好友」即可刷新。</p>
+</section>
+{% endif %}
+
+{% if wechat_ipad_group_summary %}
+<section class="work-surface">
+  <div class="toolbar">
+    <div><h2>群聊</h2></div>
+    <a class="btn btn-secondary" href="/chatrooms?channel_id={{ channel.id }}"><span class="i i-chevron-right" aria-hidden="true"></span><span>查看全部</span></a>
+  </div>
+  <div class="stats-grid compact-grid">
+    <div class="metric-item"><span>群总数</span><strong>{{ wechat_ipad_group_summary.chatroom_count }}</strong></div>
+    <div class="metric-item"><span>资料完整</span><strong>{{ wechat_ipad_group_summary.active_chatroom_count }}</strong></div>
+    <div class="metric-item"><span>已有成员</span><strong>{{ wechat_ipad_group_summary.member_synced_chatroom_count }}</strong></div>
+  </div>
+  {% if wechat_ipad_group_summary.recent_chatrooms %}
+  <div class="business-list top-gap">
+    {% for item in wechat_ipad_group_summary.recent_chatrooms %}
+    <a class="business-list-row" href="/channels/{{ channel.id }}/chatrooms/{{ item.id }}">
+      <span><strong>{{ item.name }}</strong><small>{{ item.member_count }} 位成员</small></span>
+      <span aria-hidden="true">&#8250;</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted-text top-gap">暂无群聊数据。</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if channel_chatroom_summary %}
+<section class="work-surface">
+  <div class="toolbar">
+    <div><h2>群聊</h2></div>
+    <div class="actions">
+      {% if channel_chatroom_summary.sync_action %}<form method="post" action="{{ channel_chatroom_summary.sync_action }}" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><button class="btn btn-secondary" type="submit">{{ channel_chatroom_summary.sync_button_label }}</button></form>{% endif %}
+      <a class="btn btn-ghost" href="/chatrooms?channel_id={{ channel.id }}"><span class="i i-chevron-right" aria-hidden="true"></span><span>查看全部</span></a>
+    </div>
+  </div>
+  <div class="stats-grid compact-grid">
+    <div class="metric-item"><span>群总数</span><strong>{{ channel_chatroom_summary.total }}</strong></div>
+    <div class="metric-item"><span>已启用管理</span><strong>{{ channel_chatroom_summary.active_chatroom_count }}</strong></div>
+    <div class="metric-item"><span>已有成员</span><strong>{{ channel_chatroom_summary.member_snapshot_chatroom_count }}</strong></div>
+  </div>
+</section>
+{% endif %}
+
+{% if workwechat_contact_summary %}
+<section class="work-surface">
+  <div class="toolbar">
+    <div><h2>联系人</h2></div>
+    <a class="btn btn-secondary" href="{{ workwechat_contact_summary.list_url }}"><span class="i i-chevron-right" aria-hidden="true"></span><span>查看全部</span></a>
+  </div>
+  <div class="stats-grid compact-grid">
+    <div class="metric-item"><span>联系人总数</span><strong>{{ workwechat_contact_summary.total }}</strong></div>
+    <div class="metric-item"><span>有效联系人</span><strong>{{ workwechat_contact_summary.active }}</strong></div>
+  </div>
+</section>
+{% endif %}
+
+{% if wechat_ipad_contact_list %}
+<section class="work-surface">
+  <div class="toolbar">
+    <div><h2>联系人</h2></div>
+    <span class="chip chip-outline">{{ wechat_ipad_contact_list.total_count }} 人</span>
+  </div>
+  {% if wechat_ipad_contact_list.contacts %}
+  <div class="business-list">
+    {% for item in wechat_ipad_contact_list.contacts %}
+    <div class="business-list-row">
+      <span><strong>{{ item.display_name or item.nickname or '未命名联系人' }}</strong><small>{{ item.remark or item.region or '微信联系人' }}</small></span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted-text">暂无联系人数据。</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{# 消息记录只在消息中心里有一份:这里给出总数和入口,不再重复一张分页表。 #}
+<section class="work-surface" id="channel-message-section">
+  <div class="toolbar">
+    <div><h2>消息</h2><p class="muted-text">本账号共 {{ message_total }} 条消息，完整记录、检索与发送都在消息中心。</p></div>
+    <a class="btn btn-secondary" href="/messages?channel_id={{ channel.id }}"><span class="i i-message" aria-hidden="true"></span><span>进入消息中心</span></a>
+  </div>
+</section>
+
+{% if can_manage_channel %}
+<dialog class="app-modal" id="edit-channel-modal">
+  <div class="app-modal-card">
+    <div class="app-modal-head">
+      <div><h2>账号设置</h2></div>
+      <button class="btn btn-secondary app-modal-close" type="button" data-modal-close aria-label="关闭">×</button>
+    </div>
+    <form method="post" action="/channels/{{ channel.id }}/edit" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <label class="full-row"><span>账号名称</span><input name="name" value="{{ channel.name }}" autocomplete="off" required /></label>
+      <input type="hidden" name="channel_type" value="{{ channel.channel_type }}" />
+      <label><span>平台</span><input value="{{ channel_definition.label }}" autocomplete="off" disabled /></label>
+      {# iPad 协议地址和登录网络均由平台与单次会话管理，账号设置只允许修改业务名称。 #}
+      {% if channel.channel_type != 'wechat_ipad' %}
+        {% if channel_config_field_map.get('api_base') and channel.channel_type != 'wechat_webridge' %}<label><span>服务地址</span><input name="api_base" type="url" inputmode="url" autocomplete="url" value="{{ channel.api_base or '' }}" /></label>{% endif %}
+        {% if channel_config_field_map.get('bot_token') %}<label><span>访问凭证</span><input name="bot_token" type="password" autocomplete="new-password" placeholder="留空保持当前凭证" /></label>{% endif %}
+        {% if channel_config_field_map.get('dm_policy') %}<label><span>私聊策略</span><select name="dm_policy"><option value="allowlist" {% if channel.dm_policy == 'allowlist' %}selected{% endif %}>仅允许名单</option><option value="allow" {% if channel.dm_policy == 'allow' %}selected{% endif %}>允许全部</option><option value="deny" {% if channel.dm_policy == 'deny' %}selected{% endif %}>拒绝私聊</option></select></label>{% endif %}
+        {% if channel_config_field_map.get('allow_from') %}<label class="full-row"><span>允许名单</span><textarea name="allow_from" rows="3">{{ channel.allow_from or '' }}</textarea></label>{% endif %}
+      {% endif %}
+      <div class="full-row form-actions-inline">
+        <button class="btn" type="submit"><span class="i i-save" aria-hidden="true"></span><span>保存修改</span></button>
+        <button class="btn btn-ghost" type="button" data-modal-close><span class="i i-x" aria-hidden="true"></span><span>取消</span></button>
+      </div>
+    </form>
+  </div>
+</dialog>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f5f6fa" />
+  {# 页面脚本(fetch)提交时放进 X-CSRF-Token 请求头的令牌 #}
+  <meta name="csrf-token" content="{{ csrf_token|default('', true) }}" />
+  <title>{{ page_title }} - Fulcrum</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="stylesheet" href="/static/css/icons.css" />
+  <link rel="stylesheet" href="/static/css/directory-sync.css" />
+</head>
+{# 首次安装页保留设置壳；企业与平台登录统一由 auth_base 提供视觉结构。 #}
+{% set auth_shell_paths = ['/setup', '/setup/completed'] %}
+{% set is_platform_area = request.url.path.startswith('/platform') %}
+{% set backend_home_href = '/platform/dashboard' if is_platform_area else '/dashboard' %}
+<body class="{% if request.url.path in auth_shell_paths %}auth-shell{% else %}app-shell{% endif %}">
+  <a class="skip-link" href="#main-content">跳到主内容</a>
+  {% if request.url.path in auth_shell_paths %}
+  <main class="auth-layout" id="main-content" tabindex="-1">
+    <section class="auth-panel">
+      <div class="auth-brand">
+        {# 认证页只显示当前入口所属后台，避免企业用户误把平台员工入口当成租户登录。 #}
+        <img class="brand-mark" src="/static/brand-mark.svg" alt="" />
+        <div>
+          <strong>Fulcrum</strong>
+          <p>{% if is_platform_area %}平台管理后台{% else %}全渠道智能机器人运营平台{% endif %}</p>
+        </div>
+      </div>
+      {% include '_action_feedback.html' %}
+  {% else %}
+  <div class="app-frame">
+    {# 复选框只控制移动端主导航展开状态，桌面和移动端始终复用同一份服务端导航数据。 #}
+    <input class="app-nav-toggle" id="app-nav-toggle" type="checkbox" aria-label="展开后台导航" />
+    <header class="app-topbar">
+      <div class="app-topbar-inner">
+        <a href="{{ backend_home_href }}" class="brand">
+          <img class="brand-mark" src="/static/brand-mark.svg" alt="" />
+          <span class="brand-copy">
+            <strong>Fulcrum</strong>
+            <small>{% if is_platform_area %}平台管理后台{% else %}企业工作台{% endif %}</small>
+          </span>
+        </a>
+
+        {% set visible_nav_items = primary_nav_items|default(nav_items) %}
+        {% set overflow_nav_items = secondary_nav_items|default([]) %}
+        <nav class="app-primary-nav" aria-label="主导航">
+          {% for item in visible_nav_items %}
+          <a href="{{ item.href }}" class="nav-link{% if item.active %} active{% endif %}"{% if item.active %} aria-current="page"{% endif %}>{{ item.label }}</a>
+          {% endfor %}
+          {% if overflow_nav_items %}
+          <details class="nav-more">
+            <summary class="nav-more-trigger{% if secondary_nav_active %} active{% endif %}">更多</summary>
+            <div class="nav-popover nav-more-menu">
+              {% for item in overflow_nav_items %}
+              <a href="{{ item.href }}" class="nav-popover-link{% if item.active %} active{% endif %}">{{ item.label }}</a>
+              {% endfor %}
+            </div>
+          </details>
+          {% endif %}
+        </nav>
+
+        {% if current_user %}
+        <details class="account-menu nav-more">
+          <summary class="account-menu-trigger" aria-label="打开账号菜单">
+            <span class="account-avatar" aria-hidden="true">{{ current_user.display_name[:1] }}</span>
+            <span class="account-summary">
+              <strong>{{ current_user.display_name }}</strong>
+              <small>{% if is_platform_area %}平台员工{% else %}企业账号{% endif %}</small>
+            </span>
+          </summary>
+          <div class="nav-popover account-menu-panel">
+            <div class="account-menu-identity">
+              <strong>{{ current_user.display_name }}</strong>
+              <span>{{ current_user.role }}</span>
+            </div>
+            {% for item in account_nav_items|default([]) %}
+            <a class="nav-popover-link{% if item.active %} active{% endif %}" href="{{ item.href }}">{{ item.label }}</a>
+            {% endfor %}
+            <a class="nav-popover-link" href="{{ password_action|default('/profile/password', true) }}">账号安全</a>
+            {# 注销会销毁数据库会话，必须提交当前会话配套的 CSRF 原始值，不能改成普通链接。 #}
+            <form method="post" action="{{ logout_action|default('/logout', true) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token|default('', true) }}" />
+              <button class="nav-popover-link account-logout" type="submit">退出登录</button>
+            </form>
+          </div>
+        </details>
+        {% endif %}
+
+        {# 移动端菜单按钮使用稳定三线图形，不在狭窄顶部栏重复显示文字标签。 #}
+        <label class="app-nav-trigger" for="app-nav-toggle" aria-label="展开或收起导航"><span></span><span></span><span></span></label>
+      </div>
+    </header>
+
+    <div class="app-main">
+      <main class="workspace" id="main-content" tabindex="-1">
+      <section class="page-header">
+        {# 返回按钮统一放在页头最左边:二级页面在自己的 {% block back %} 里放一个 .page-back 链接,不再把"返回xx"塞在右侧操作区。 #}
+        <div class="page-header-lead">
+          {% block back %}{% endblock %}
+          <div class="page-header-copy">
+            <h1{% if page_title_class %} class="{{ page_title_class }}"{% endif %}>{{ page_title }}</h1>
+            <div class="page-intro">{% block page_intro %}{% endblock %}</div>
+          </div>
+        </div>
+        <div class="page-header-actions">{% block hero_actions %}{% endblock %}</div>
+      </section>
+
+      {% include '_action_feedback.html' %}
+
+      {% if section_nav_items %}
+      <nav class="section-tabs" aria-label="当前模块入口">
+        {% for item in section_nav_items %}
+        <a class="section-tab{% if item.active %} active{% endif %}" href="{{ item.href }}"{% if item.active %} aria-current="page"{% endif %}>{{ item.label }}</a>
+        {% endfor %}
+      </nav>
+      {% endif %}
+  {% endif %}
+
+      {% block content %}{% endblock %}
+
+  {% if request.url.path in auth_shell_paths %}
+    </section>
+  </main>
+  {% endif %}
+  {% if request.url.path not in auth_shell_paths %}
+      </main>
+    </div>
+  </div>
+  {% endif %}
+  <script>
+    (() => {
+      const openers = document.querySelectorAll("[data-modal-open]");
+      const closers = document.querySelectorAll("[data-modal-close]");
+      const focusableSelector = "button, [href], input, select, textarea, summary, [tabindex]:not([tabindex='-1'])";
+      let lastModalTrigger = null;
+
+      openers.forEach((button) => {
+        button.addEventListener("click", () => {
+          const targetId = button.getAttribute("data-modal-open");
+          const dialog = targetId ? document.getElementById(targetId) : null;
+          if (dialog && typeof dialog.showModal === "function") {
+            // 记录行的操作菜单只负责选择动作，打开弹窗后立即收起，关闭弹窗时不会残留遮挡层。
+            const actionMenu = button.closest("details.nav-more");
+            if (actionMenu) {
+              actionMenu.open = false;
+            }
+            // 操作菜单在打开弹窗时已经收起，原按钮不可见；关闭后返回仍可见的菜单摘要。
+            // 页头直接打开的新增弹窗仍返回原按钮，避免键盘焦点遗留在已关闭的 dialog 内。
+            lastModalTrigger = actionMenu ? actionMenu.querySelector("summary") : button;
+            dialog.showModal();
+            // 弹窗打开后把焦点移入弹窗，键盘用户不需要重新 Tab 很多次才能操作表单。
+            const firstFocusable = dialog.querySelector(focusableSelector);
+            if (firstFocusable) {
+              firstFocusable.focus();
+            }
+          }
+        });
+      });
+
+      closers.forEach((button) => {
+        button.addEventListener("click", () => {
+          const dialog = button.closest("dialog");
+          if (dialog) {
+            dialog.close();
+          }
+        });
+      });
+
+      document.querySelectorAll("dialog.app-modal").forEach((dialog) => {
+        dialog.addEventListener("close", () => {
+          if (lastModalTrigger && typeof lastModalTrigger.focus === "function") {
+            lastModalTrigger.focus();
+          }
+          lastModalTrigger = null;
+        });
+
+        dialog.addEventListener("click", (event) => {
+          // 弹窗内按钮可能在本次点击中切换步骤并改变高度，不能再用变化后的边界误判原点击。
+          // 只有直接落在 dialog 遮罩上的点击才检查坐标，卡片内的任何子元素都不触发关闭。
+          if (event.target !== dialog) return;
+          const rect = dialog.getBoundingClientRect();
+          const withinDialog =
+            rect.top <= event.clientY &&
+            event.clientY <= rect.top + rect.height &&
+            rect.left <= event.clientX &&
+            event.clientX <= rect.left + rect.width;
+          if (!withinDialog) {
+            dialog.close();
+          }
+        });
+      });
+    })();
+
+    (() => {
+      const forms = document.querySelectorAll("form");
+      if (!forms.length) return;
+
+      // 普通表单提交后锁定提交按钮，减少用户连续点击造成重复创建、重复同步或重复重启。
+      forms.forEach((form) => {
+        form.addEventListener("submit", (event) => {
+          // 同一次提交事件里还有别的监听器:统一确认弹窗(dialog.js)会拦下需要确认的提交,页面脚本(消息发送框、
+          // 功能设置保存)会改用 fetch 提交。它们都靠 preventDefault 接管,所以等本次事件派发完再判断:
+          // 被接管的不是整页提交,不能锁按钮(否则脚本保存完按钮会一直停在"处理中…")。
+          setTimeout(() => {
+            if (event.defaultPrevented) return;
+            const submitters = form.querySelectorAll("button[type='submit'], input[type='submit']");
+            submitters.forEach((submitter) => {
+              submitter.dataset.originalText = submitter.textContent || "";
+              submitter.disabled = true;
+              if (submitter.tagName === "BUTTON") {
+                // 只有图标的按钮不能把内容换成文字(会丢图标),改为转圈提示忙碌
+                if (submitter.classList.contains("btn-icon")) {
+                  submitter.classList.add("is-busy");
+                  submitter.setAttribute("aria-busy", "true");
+                } else {
+                  submitter.textContent = "处理中…";
+                }
+              }
+            });
+          }, 0);
+        });
+      });
+    })();
+
+    (() => {
+      const compactFilters = document.querySelectorAll("details.compact-filter");
+      if (!compactFilters.length) return;
+
+      /*
+       * details 的关闭状态会在浏览器内部直接移除内容布局，桌面 CSS 无法可靠覆盖。
+       * 因此模板默认输出 open，初始化时仅在 820px 以下关闭没有生效条件的筛选区；
+       * 有效条件始终展开，切换回桌面时也恢复完整工具栏，避免条件被无意隐藏。
+       */
+      const compactViewport = window.matchMedia("(max-width: 820px)");
+      const syncCompactFilters = () => {
+        compactFilters.forEach((filter) => {
+          const hasActiveFilter = filter.dataset.filterActive === "true";
+          filter.open = !compactViewport.matches || hasActiveFilter;
+        });
+      };
+
+      syncCompactFilters();
+      if (typeof compactViewport.addEventListener === "function") {
+        compactViewport.addEventListener("change", syncCompactFilters);
+      }
+    })();
+
+    (() => {
+      const moreNavs = document.querySelectorAll(".nav-more");
+      if (!moreNavs.length) return;
+
+      // 顶部“更多”菜单是低频入口的承载点，点击外部和按 Esc 时收起，避免遮挡后续操作。
+      document.addEventListener("click", (event) => {
+        moreNavs.forEach((nav) => {
+          if (!nav.contains(event.target)) {
+            nav.open = false;
+          }
+        });
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        moreNavs.forEach((nav) => {
+          nav.open = false;
+        });
+      });
+    })();
+  </script>
+  {# 全局下拉框增强:把原生 select 升级为统一调性的自绘下拉,表单与 change 事件保持原生行为。 #}
+  {# 统一弹窗:appDialog.confirm / alert 与 data-confirm-* 声明式确认,替代浏览器默认弹窗。 #}
+  <script src="/static/js/dialog.js" defer></script>
+  {# 统一提示条 appToast,以及"开关点击即保存"(data-autosave-*)。 #}
+  <script src="/static/js/toast.js" defer></script>
+  <script src="/static/js/action-feedback.js" defer></script>
+  <script src="/static/js/switches.js" defer></script>
+  {# 图片/视频放大查看器 appLightbox,消息中心和朋友圈共用。 #}
+  <script src="/static/js/lightbox.js" defer></script>
+  <script src="/static/js/select.js" defer></script>
+  <script src="/static/js/config-suggestions.js" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,5 @@
+# 为 PostgreSQL 16 安装 Hindsight 所需的 pgvector 扩展。
+FROM postgres:16-bookworm
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-16-pgvector \
+    && rm -rf /var/lib/apt/lists/*

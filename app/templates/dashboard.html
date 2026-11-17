@@ -1,0 +1,259 @@
+{% extends 'base.html' %}
+{% from '_dashboard_chart.html' import trend_chart %}
+{% from '_identity.html' import identity %}
+{% block hero_actions %}
+<div class="chip-row">
+  <span class="chip chip-outline">近 24 小时</span>
+</div>
+{% endblock %}
+{% block content %}
+{# 首屏指标使用等高紧凑网格，时间范围移到页头，避免重复总览标题挤占数据区。 #}
+<section class="dashboard-overview">
+  <div class="metric-band dashboard-kpi-grid">
+    <div class="metric-item">
+      <span>今日入站</span>
+      <strong>{{ dashboard_metrics.inbound_today }}</strong>
+      <div class="muted-text">从今日 00:00 开始累计</div>
+    </div>
+    <div class="metric-item">
+      <span>24h 入站</span>
+      <strong>{{ dashboard_metrics.inbound_24h }}</strong>
+      <div class="muted-text">最近 24 小时入站消息</div>
+    </div>
+    <div class="metric-item">
+      <span>24h 出站</span>
+      <strong>{{ dashboard_metrics.outbound_24h }}</strong>
+      <div class="muted-text">最近 24 小时成功入库的出站消息</div>
+    </div>
+    <div class="metric-item">
+      <span>活跃机器人</span>
+      <strong>{{ dashboard_metrics.active_bots_24h }}</strong>
+      <div class="muted-text">最近 24 小时有消息流动</div>
+    </div>
+    <div class="metric-item">
+      <span>活跃用户</span>
+      <strong>{{ dashboard_metrics.active_users_24h }}</strong>
+      <div class="muted-text">按渠道内发送者 ID 去重</div>
+    </div>
+    <div class="metric-item">
+      <span>活跃群组</span>
+      <strong>{{ dashboard_metrics.active_groups_24h }}</strong>
+      <div class="muted-text">最近 24 小时有群聊入站</div>
+    </div>
+    <div class="metric-item">
+      <span>插件触发</span>
+      <strong>{{ dashboard_metrics.plugin_triggers_24h }}</strong>
+      <div class="muted-text">最近 24 小时插件调度次数</div>
+    </div>
+    <div class="metric-item">
+      <span>插件成功率</span>
+      <strong>{{ dashboard_metrics.plugin_success_rate_24h }}%</strong>
+      <div class="muted-text">按最近 24 小时已执行插件计算</div>
+    </div>
+    <div class="metric-item metric-item-danger">
+      <span>异常渠道</span>
+      <strong>{{ dashboard_metrics.abnormal_channels }}</strong>
+      <div class="muted-text">启用中但状态异常的渠道</div>
+    </div>
+    <div class="metric-item metric-item-danger">
+      <span>未恢复告警</span>
+      <strong>{{ dashboard_metrics.open_alerts }}</strong>
+      <div class="muted-text">需要持续关注的问题</div>
+    </div>
+  </div>
+</section>
+
+<div class="panel-grid panel-grid-balanced overview-card-grid dashboard-top-grid">
+  <section class="page-section">
+    <div class="section-head">
+      <div>
+
+        <h2>入站趋势</h2>
+      </div>
+      <span class="chip chip-outline">近 24 小时</span>
+    </div>
+    {{ trend_chart(trend_series.inbound_chart, '最近 24 小时入站消息趋势') }}
+    <div class="metric-band metric-band-compact">
+      <div class="metric-item">
+        <span>峰值</span>
+        <strong>{{ trend_series.inbound_chart.max_value }}</strong>
+      </div>
+      <div class="metric-item">
+        <span>最新一小时</span>
+        <strong>{{ trend_series["items"][-1].inbound if trend_series["items"] else 0 }}</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="page-section">
+    <div class="section-head">
+      <div>
+
+        <h2>插件使用趋势</h2>
+      </div>
+      <span class="chip chip-outline">近 24 小时</span>
+    </div>
+    {{ trend_chart(trend_series.plugin_chart, '最近 24 小时插件触发趋势', 'success') }}
+    <div class="metric-band metric-band-compact">
+      <div class="metric-item">
+        <span>峰值</span>
+        <strong>{{ trend_series.plugin_chart.max_value }}</strong>
+      </div>
+      <div class="metric-item">
+        <span>最新一小时</span>
+        <strong>{{ trend_series["items"][-1].plugin_trigger if trend_series["items"] else 0 }}</strong>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="panel-grid panel-grid-balanced overview-card-grid">
+  <section class="page-section">
+    <div class="section-head">
+      <div>
+
+        <h2>热门插件</h2>
+      </div>
+    </div>
+    <div class="dashboard-ranking-list">
+      {% for item in rankings.plugins %}
+      <div class="dashboard-ranking-row">
+        <div>
+          <strong>{{ item.label }}</strong>
+          <p class="muted-text">{{ item.sub_label or '最近 24 小时' }}</p>
+        </div>
+        <span class="chip chip-outline">{{ item.value }}</span>
+      </div>
+      {% else %}
+      <p class="muted-text">当前还没有插件执行记录。</p>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="page-section">
+    <div class="section-head">
+      <div>
+
+        <h2>活跃机器人</h2>
+      </div>
+      <a class="chip chip-action" href="/bots">查看全部</a>
+    </div>
+    <div class="dashboard-ranking-list">
+      {% for item in rankings.bots %}
+      <div class="dashboard-ranking-row">
+        <div>
+          <strong>{% if item.href %}<a href="{{ item.href }}">{{ item.label }}</a>{% else %}{{ item.label }}{% endif %}</strong>
+          <p class="muted-text">最近 24 小时入站消息</p>
+        </div>
+        <span class="chip chip-outline">{{ item.value }}</span>
+      </div>
+      {% else %}
+      <p class="muted-text">当前还没有活跃机器人数据。</p>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+<div class="panel-grid panel-grid-balanced overview-card-grid">
+  <section class="page-section">
+    <div class="section-head">
+      <div>
+
+        <h2>活跃用户</h2>
+      </div>
+    </div>
+    <div class="dashboard-ranking-list">
+      {% for item in rankings.users %}
+      <div class="dashboard-ranking-row">
+        <div>{{ identity(item.identity) }}</div>
+        <span class="chip chip-outline">{{ item.value }}</span>
+      </div>
+      {% else %}
+      <p class="muted-text">当前还没有活跃用户数据。</p>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="page-section">
+    <div class="section-head">
+      <div>
+
+        <h2>活跃群组</h2>
+      </div>
+    </div>
+    <div class="dashboard-ranking-list">
+      {% for item in rankings.chatrooms %}
+      <div class="dashboard-ranking-row">
+        <div>{{ identity(item.identity) }}</div>
+        <span class="chip chip-outline">{{ item.value }}</span>
+      </div>
+      {% else %}
+      <p class="muted-text">当前还没有活跃群组数据。</p>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+<section class="page-section">
+  <div class="section-head">
+    <div>
+
+      <h2>实时运维态势</h2>
+    </div>
+  </div>
+  <div class="metric-band metric-band-compact">
+    <div class="metric-item">
+      <span>在线渠道</span>
+      <strong>{{ ops_snapshot.online_channels }}</strong>
+    </div>
+    <div class="metric-item">
+      <span>异常渠道</span>
+      <strong>{{ ops_snapshot.abnormal_channels }}</strong>
+    </div>
+    <div class="metric-item">
+      <span>最近 24h 错误</span>
+      <strong>{{ ops_snapshot.recent_errors_24h }}</strong>
+    </div>
+    <div class="metric-item">
+      <span>失败任务</span>
+      <strong>{{ ops_snapshot.failed_jobs }}</strong>
+    </div>
+    <div class="metric-item">
+      <span>待处理任务</span>
+      <strong>{{ ops_snapshot.pending_jobs }}</strong>
+    </div>
+    <div class="metric-item">
+      <span>启用渠道</span>
+      <strong>{{ ops_snapshot.enabled_channels }}</strong>
+    </div>
+  </div>
+</section>
+
+<section class="page-section">
+  <div class="section-head">
+    <div>
+
+      <h2>机器人总览</h2>
+    </div>
+    <a class="chip chip-action" href="/bots">查看全部</a>
+  </div>
+  <table class="table">
+    <thead><tr><th>机器人</th><th class="col-status">状态</th><th class="col-count">渠道</th><th class="col-count">插件</th><th class="col-count">会话</th><th class="col-count">消息</th><th class="col-action">操作</th></tr></thead>
+    <tbody>
+      {% for row in bot_rows %}
+      <tr>
+        <td>{{ row.bot.name }}</td>
+        <td class="col-status"><span class="badge badge-{{ row.bot.status|lower }}">{{ row.bot.status }}</span></td>
+        <td class="col-count">{{ row.channels }}</td>
+        <td class="col-count">{{ row.plugins }}</td>
+        <td class="col-count">{{ row.conversations }}</td>
+        <td class="col-count">{{ row.messages }}</td>
+        <td class="col-action"><a class="btn btn-small" href="/bots/{{ row.bot.id }}">进入机器人</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty-state">当前还没有机器人。</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

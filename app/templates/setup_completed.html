@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="auth-showcase auth-showcase-single">
+  <section class="login-card auth-form-card auth-complete-card">
+    <div class="auth-complete-mark">OK</div>
+    <p class="auth-eyebrow">设置完成</p>
+    <h1>平台管理员已创建</h1>
+    <p class="auth-lead">现在可以登录平台管理后台。</p>
+
+    <div class="auth-form-actions">
+      {# 首次安装创建的是平台管理员，完成后的唯一正确入口是独立的平台登录页。 #}
+      <a class="btn auth-submit" href="/platform/login">进入平台后台</a>
+    </div>
+  </section>
+</section>
+{% endblock %}

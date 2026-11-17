@@ -1,0 +1,144 @@
+{% extends 'base.html' %}
+{% block back %}<a class="page-back" href="/channels/{{ channel.id }}" title="返回渠道详情" aria-label="返回渠道详情"><span class="i i-arrow-left" aria-hidden="true"></span></a>{% endblock %}
+{% from '_identity.html' import identity %}
+{% from '_dashboard_chart.html' import trend_chart %}
+{% block hero_actions %}
+<div class="hero-action-cluster">
+  
+  {# 同步命令放在页头，随时可点；命令进入手机长轮询队列。 #}
+  {% for cmd, label in [('friends_all','同步好友'),('official_accounts','同步公众号'),('groups_all','同步群组')] %}
+  <form method="post" action="/channels/{{ channel.id }}/wechat-webridge/command" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><input type="hidden" name="command_name" value="{{ cmd }}" /><input type="hidden" name="args_json" value="{}" /><button class="btn" type="submit">{{ label }}</button></form>
+  {% endfor %}
+</div>
+{% endblock %}
+{% block content %}
+{% set base = '/channels/' ~ channel.id ~ '/wechat-webridge' %}
+{# iPhone 状态：顶部一行精简摘要（每 10 秒自动刷新），完整信息与趋势折叠在“展开详情”。 #}
+<section class="work-surface" id="device-summary" data-live-url="{{ base }}/live">
+  <div class="toolbar">
+    <div class="chip-row" aria-live="polite">
+      <strong>iPhone</strong>
+      <span class="chip {% if live.online %}chip-success{% else %}chip-muted{% endif %}" data-live="online">{{ '在线' if live.online else '离线' }}</span>
+      <span class="chip chip-outline" data-live="battery">电量 {{ (live.battery_percent ~ '%') if live.battery_percent is not none else '-' }}{% if live.battery_state %} · {{ live.battery_state }}{% endif %}</span>
+      <span class="chip chip-outline" data-live="memory">内存 {{ (live.memory_used_percent ~ '%') if live.memory_used_percent is not none else '-' }}</span>
+      <span class="chip {% if live.pending or live.running %}chip-success{% else %}chip-outline{% endif %}" data-live="backlog">积压 {{ live.pending }}{% if live.running %} · 执行中 {{ live.running }}{% endif %}</span>
+      {# 消息延迟 = 手机抓到消息的时刻 - 消息产生时刻（最近 1 小时 p90）；偏高说明手机/微信侧在后台被限制。 #}
+      <span class="chip {% if live.lag_warn %}chip-success{% else %}chip-outline{% endif %}" data-live="lag" title="最近 1 小时消息上报延迟（90% 的消息不超过该秒数）">上报延迟 {{ (live.lag_p90 ~ ' 秒') if live.lag_p90 is not none else '-' }}</span>
+      <span class="chip chip-muted" data-live="seen">心跳 {{ live.last_seen_at|bj_time if live.last_seen_at else '-' }}</span>
+    </div>
+  </div>
+  <details class="disclosure">
+    <summary class="muted-text">详细信息</summary>
+    <p class="muted-text top-gap">注册于 {{ device.registered_at|bj_time if device.registered_at else '-' }}</p>
+    <div class="stats-grid compact-grid">
+      {% for item in device.hardware %}<div class="metric-item metric-item-text"><span>{{ item.label }}</span><strong class="value-break">{{ item.value }}</strong></div>{% endfor %}
+      {% for item in device.basic %}<div class="metric-item metric-item-text"><span>{{ item.label }}</span><strong class="value-break">{{ item.value }}</strong></div>{% endfor %}
+      {% for item in device.fields %}<div class="metric-item metric-item-text"><span>{{ item.label }}</span><strong class="value-break">{{ item.value }}</strong></div>{% endfor %}
+    </div>
+    {% if not device.fields %}<p class="muted-text">手机尚未上报运行状态（state），登录、授权、缓存等字段会在上报后显示。</p>{% endif %}
+    <div class="panel-grid panel-grid-balanced top-gap">
+      {% if device.lag.chart['items'] %}<div><h3>消息上报延迟（秒，每小时 p90）</h3>{{ trend_chart(device.lag.chart, '近 24 小时消息上报延迟趋势') }}<p class="muted-text">最近 1 小时 {{ device.lag.recent_count }} 条，p90 {{ device.lag.recent_p90 if device.lag.recent_p90 is not none else '-' }} 秒，最大 {{ device.lag.recent_max if device.lag.recent_max is not none else '-' }} 秒。延迟出现在手机抓取之前，通常是手机或微信被系统限制后台。</p></div>{% endif %}
+      <div><h3>待处理命令</h3>{{ trend_chart(device.pending_chart, '近 24 小时待处理命令趋势') }}</div>
+      {% if device.battery_chart['items'] %}<div><h3>电量 %</h3>{{ trend_chart(device.battery_chart, '近 24 小时电量趋势', 'success') }}</div>{% endif %}
+      {% if device.memory_chart['items'] %}<div><h3>系统内存已用 %</h3>{{ trend_chart(device.memory_chart, '近 24 小时系统内存使用趋势') }}</div>{% endif %}
+      {% if device.cache_chart['items'] %}<div><h3>缓存消息数</h3>{{ trend_chart(device.cache_chart, '近 24 小时缓存消息趋势', 'success') }}</div>{% endif %}
+      {% if device.event_chart['items'] %}<div><h3>待上传事件</h3>{{ trend_chart(device.event_chart, '近 24 小时待上传事件趋势') }}</div>{% endif %}
+    </div>
+    <details class="disclosure top-gap">
+      <summary class="muted-text">其他上报与能力列表（{{ device.capability_count }} 项）</summary>
+      {% if device.extra %}<div class="stats-grid compact-grid top-gap">{% for item in device.extra %}<div class="metric-item metric-item-text"><span>{{ item.label }}</span><strong class="value-break">{{ item.value }}</strong></div>{% endfor %}</div>{% endif %}
+      <p class="muted-text value-break">{{ device.capabilities|join('、') if device.capabilities else '暂无能力上报' }}</p>
+    </details>
+  </details>
+</section>
+
+<section class="work-surface">
+  <div class="toolbar">
+    <nav class="chip-row" aria-label="数据类型">
+      {% for key, label in [('contacts','好友'),('groups','群组'),('members','群成员'),('messages','消息')] %}
+      <a class="btn {{ 'btn-primary' if dashboard.tab == key else 'btn-secondary' }}" href="{{ base }}?tab={{ key }}">{{ label }} {{ dashboard.counts[key] }}</a>
+      {% endfor %}
+    </nav>
+    <form method="get" action="{{ base }}" class="chip-row">
+      <input type="hidden" name="tab" value="{{ dashboard.tab }}" />
+      {% if dashboard.tab == 'messages' %}
+      <select name="conversation_id" aria-label="按群或好友筛选">
+        <option value="0">全部群和好友</option>
+        {% for conv in dashboard.conversations %}<option value="{{ conv.id }}" {% if conv.id == dashboard.conversation_id %}selected{% endif %}>{{ '群 · ' if conv.is_group else '' }}{{ conv.name }}</option>{% endfor %}
+      </select>
+      <input type="search" name="sender" value="{{ dashboard.sender }}" placeholder="发送者昵称或微信 ID" maxlength="100" />
+      {% endif %}
+      <input type="search" name="keyword" value="{{ dashboard.keyword }}" placeholder="搜索昵称、备注、微信 ID 或内容" maxlength="100" />
+      <button class="btn btn-secondary btn-icon" type="submit" title="搜索" aria-label="搜索"><span class="i i-search" aria-hidden="true"></span></button>
+      {% if dashboard.keyword or dashboard.sender or dashboard.conversation_id %}<a class="btn btn-secondary btn-icon" href="{{ base }}?tab={{ dashboard.tab }}" title="清除" aria-label="清除"><span class="i i-x" aria-hidden="true"></span></a>{% endif %}
+    </form>
+  </div>
+
+  {% if dashboard.tab == 'contacts' %}
+    {% if dashboard.rows %}<table class="table"><thead><tr><th>好友</th><th>备注</th><th class="col-time">最近同步</th><th class="col-action">操作</th></tr></thead><tbody>
+    {% for item in dashboard.rows %}<tr><td>{{ identity(item.identity, 'lg') }}</td><td>{{ item.remark or '-' }}</td><td class="col-time">{{ item.last_synced_at|bj_time if item.last_synced_at else '-' }}</td><td class="col-action">{% if item.conversation_id %}<a class="btn btn-small" href="/messages?conversation_id={{ item.conversation_id }}&channel_id={{ channel.id }}"><span class="i i-message" aria-hidden="true"></span><span>聊天记录</span></a>{% else %}<span class="muted-text">暂无会话</span>{% endif %}</td></tr>{% endfor %}
+    </tbody></table>{% else %}<p class="muted-text">{{ '没有匹配的好友' if dashboard.keyword else '暂无好友资料，点击右上角“同步好友”。' }}</p>{% endif %}
+
+  {% elif dashboard.tab == 'groups' %}
+    {% if dashboard.rows %}<table class="table"><thead><tr><th>群组</th><th>成员数</th><th class="col-time">最近同步</th><th class="col-action">操作</th></tr></thead><tbody>
+    {% for item in dashboard.rows %}<tr><td>{{ identity(item.identity, 'lg') }}</td><td>{{ item.member_count or '-' }}</td><td class="col-time">{{ item.last_synced_at|bj_time if item.last_synced_at else '-' }}</td><td class="col-action">{% if item.conversation_id %}<a class="btn btn-small" href="/messages?conversation_id={{ item.conversation_id }}&channel_id={{ channel.id }}"><span class="i i-message" aria-hidden="true"></span><span>聊天记录</span></a> {% endif %}<a class="btn btn-small" href="/channels/{{ channel.id }}/chatrooms/{{ item.room_id }}">群详情</a></td></tr>{% endfor %}
+    </tbody></table>{% else %}<p class="muted-text">{{ '没有匹配的群组' if dashboard.keyword else '暂无群组资料，点击右上角“同步群组”。' }}</p>{% endif %}
+
+  {% elif dashboard.tab == 'members' %}
+    {% if dashboard.rows %}<table class="table"><thead><tr><th>成员</th><th>所在群</th><th>角色</th><th class="col-time">最近同步</th></tr></thead><tbody>
+    {% for item in dashboard.rows %}<tr><td>{{ identity(item.identity) }}</td><td><a href="/channels/{{ channel.id }}/chatrooms/{{ item.room_id }}">{{ identity(item.room) }}</a></td><td>{{ item.role or '-' }}</td><td class="col-time">{{ item.last_synced_at|bj_time if item.last_synced_at else '-' }}</td></tr>{% endfor %}
+    </tbody></table>{% else %}<p class="muted-text">{{ '没有匹配的群成员' if dashboard.keyword else '暂无群成员，请在群详情里同步成员。' }}</p>{% endif %}
+
+  {% else %}
+    {% if dashboard.rows %}<table class="table"><thead><tr><th class="col-time">时间</th><th class="col-dir">方向</th><th>发送者</th><th class="col-type">类型</th><th>内容</th></tr></thead><tbody>
+    {% for item in dashboard.rows|reverse %}<tr><td class="col-time">{{ item.created_at|bj_time if item.created_at else '-' }}</td><td class="col-dir">{{ '入站' if item.direction == 'in' else '出站' }}</td><td>{{ identity(dashboard.message_identities.get(item.id)) }}</td><td class="col-type"><span class="chip chip-muted">{{ item.message_type }}</span></td><td>{{ (item.content|message_display(item.message_type))[:160] }}</td></tr>{% endfor %}
+    </tbody></table>
+    <p class="muted-text top-gap"><a href="/messages?channel_id={{ channel.id }}">在消息中心按会话查看完整聊天</a></p>
+    {% else %}<p class="muted-text">{{ '没有匹配的消息' if (dashboard.keyword or dashboard.sender or dashboard.conversation_id) else '暂无消息记录。' }}</p>{% endif %}
+  {% endif %}
+
+  {% set pg = dashboard.pagination %}
+  {% if pg.total_pages > 1 %}
+  {# 翻页需要保留所有筛选条件。 #}
+  {% set qs = ('&keyword=' ~ (dashboard.keyword|urlencode) if dashboard.keyword else '') ~ ('&sender=' ~ (dashboard.sender|urlencode) if dashboard.sender else '') ~ ('&conversation_id=' ~ dashboard.conversation_id if dashboard.conversation_id else '') %}
+  <div class="list-pagination"><div class="list-pagination-summary">第 {{ pg.page }} / {{ pg.total_pages }} 页，共 {{ pg.total }} 条{% if dashboard.tab == 'messages' %}（第 1 页为最新）{% endif %}</div>
+  <div class="list-pagination-actions">
+    {% if dashboard.tab == 'messages' %}
+      {% if pg.has_next %}<a class="btn btn-secondary" href="{{ base }}?tab=messages&page={{ pg.next_page }}{{ qs }}">更早</a>{% endif %}
+      {% if pg.has_prev %}<a class="btn btn-secondary" href="{{ base }}?tab=messages&page={{ pg.prev_page }}{{ qs }}">更新</a>{% endif %}
+    {% else %}
+      {% if pg.has_prev %}<a class="btn btn-secondary btn-icon" href="{{ base }}?tab={{ dashboard.tab }}&page={{ pg.prev_page }}{{ qs }}" title="上一页" aria-label="上一页"><span class="i i-chevron-left" aria-hidden="true"></span></a>{% endif %}
+      {% if pg.has_next %}<a class="btn btn-secondary btn-icon" href="{{ base }}?tab={{ dashboard.tab }}&page={{ pg.next_page }}{{ qs }}" title="下一页" aria-label="下一页"><span class="i i-chevron-right" aria-hidden="true"></span></a>{% endif %}
+    {% endif %}
+  </div></div>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+  // 顶部摘要每 10 秒拉取一次实时数据；页面不可见时暂停，请求失败静默等待下次。
+  (() => {
+    const box = document.getElementById("device-summary");
+    if (!box) return;
+    const set = (key, text) => { const node = box.querySelector(`[data-live="${key}"]`); if (node) node.textContent = text; };
+    const pct = (value) => (value === null || value === undefined ? "-" : value + "%");
+    const refresh = async () => {
+      if (document.hidden) return;
+      try {
+        const response = await fetch(box.dataset.liveUrl, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+        if (!response.ok) return;
+        const d = await response.json();
+        set("online", d.online ? "在线" : "离线");
+        set("battery", "电量 " + pct(d.battery_percent) + (d.battery_state ? " · " + d.battery_state : ""));
+        set("memory", "内存 " + pct(d.memory_used_percent));
+        set("backlog", "积压 " + d.pending + (d.running ? " · 执行中 " + d.running : ""));
+        set("lag", "上报延迟 " + (d.lag_p90 === null || d.lag_p90 === undefined ? "-" : d.lag_p90 + " 秒"));
+        const lagNode = box.querySelector('[data-live="lag"]');
+        if (lagNode) lagNode.className = "chip " + (d.lag_warn ? "chip-success" : "chip-outline");
+        set("seen", "心跳 " + (d.last_seen_at ? new Date(d.last_seen_at).toLocaleTimeString("zh-CN", { hour12: false }) : "-"));
+      } catch (error) { /* 网络抖动不打扰操作人员 */ }
+    };
+    setInterval(refresh, 10000);
+  })();
+</script>
+{% endblock %}

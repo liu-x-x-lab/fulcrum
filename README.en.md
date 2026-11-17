@@ -1,0 +1,95 @@
+# Fulcrum
+
+[简体中文](README.md) | **English**
+
+[![Stars](https://img.shields.io/github/stars/liu-x-x-lab/fulcrum?style=flat&logo=github)](https://github.com/liu-x-x-lab/fulcrum/stargazers)
+[![License](https://img.shields.io/github/license/liu-x-x-lab/fulcrum)](LICENSE)
+[![CI](https://github.com/liu-x-x-lab/fulcrum/actions/workflows/ci.yml/badge.svg)](https://github.com/liu-x-x-lab/fulcrum/actions/workflows/ci.yml)
+[![Contributors](https://img.shields.io/github/contributors/liu-x-x-lab/fulcrum)](https://github.com/liu-x-x-lab/fulcrum/graphs/contributors)
+
+Fulcrum is an open-source, multi-tenant bot operations platform. One back office connects WeChat, WeCom
+(WeChat Work), Telegram and more, so a team can run many bot accounts and groups and extend them with plugins and
+APIs. It handles tenants, teams, bot quotas, a plugin runtime, group management, a message center and an
+Open API/Webhook gateway for your own business systems.
+
+> **Fulcrum itself is free and open source ([Apache-2.0](LICENSE))** — use, modify and run it commercially at no
+> cost; there is no license fee or subscription. The "plans / trials / payment orders" mentioned below are a built-in
+> feature **for operators** who host Fulcrum and want to charge *their own* customers. Names, prices and quotas are
+> whatever the operator sets in the back office; leave it unused if you don't charge anyone.
+
+> Browse the [documentation index](docs/README.md) for development, API, channel
+> and deployment guides. Some operational references are currently in Chinese.
+
+## Features
+
+- **Multi-tenant by design** — tenants, roles, per-tenant data isolation, CSRF and session protection.
+- **Channels** — a unified adapter layer for WeChat (iPad protocol, phone bridge, desktop automation), WeCom and Telegram.
+- **Plugin runtime** — directory-based plugins (`config.toml` + `plugin.py`) with per-bot and per-group scopes,
+  encrypted per-binding secrets and scheduled actions.
+- **Group features** — AI chat with long-term memory and web search, red-packet/transfer handling, points, and more.
+- **Message center & Moments** — a WeChat-style message center and a Moments viewer with on-demand media loading.
+- **Optional billing for operators** — operator-defined plans, quotas, manual payment orders, review and subscription fulfilment, for charging your own customers.
+- **Open API / Webhook** — send messages and files, query conversations and groups, receive signed webhooks.
+- **Operations** — database lifecycle checks (`/readyz` stays 503 until migrations match), alerts and dashboards.
+
+## Tech stack
+
+Python 3.11, FastAPI, SQLAlchemy 2, Alembic, Jinja2, Uvicorn, SQLite or MariaDB.
+
+## Quick start
+
+```bash
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+alembic upgrade head
+uvicorn app.main:app --host 127.0.0.1 --port 8280
+```
+
+Then open <http://127.0.0.1:8280>. For production use Docker Compose (see [docs/deployment.md](docs/deployment.md))
+behind a TLS reverse proxy.
+
+## Plugin development
+
+Before using an AI coding agent, read the [shared development contract](AGETNS-DEV.md).
+It defines plugin architecture, UI conventions, focused checks, and publication rules.
+
+Plugins are directory packages (`config.toml` manifest + `plugin.py`). Config fields declared in the manifest generate the
+admin form automatically. See the [plugin development guide](docs/plugin-development.md).
+
+## Security
+
+- `SECRET_KEY` must be a random string of at least 32 characters. Outside development
+  (`APP_ENV` not in `dev/local/demo/test`) the app **refuses to start** with a placeholder or short key.
+- Plugin secrets use a separate AES-GCM master key (`ABOT_PLUGIN_SECRET_KEY`).
+- Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
+
+## Not included
+
+Client-side providers for WeChat/WeCom (hook, iPad protocol, desktop automation) are separate programs that depend on
+third-party components and are **not distributed in this repository**. Using unofficial protocols may violate the
+terms of the platforms involved; evaluate the risk and comply with applicable laws.
+
+## Community
+
+Scan the QR code (WeCom) to join the community group — questions, ideas and collaboration are welcome:
+
+<img src="docs/images/community-qr.png" alt="Community QR code" width="220" />
+
+You can also ask questions or report problems in [Issues](https://github.com/liu-x-x-lab/fulcrum/issues).
+
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=liu-x-x-lab/fulcrum&type=Date)](https://star-history.com/#liu-x-x-lab/fulcrum&Date)
+
+## Contributors
+
+Thanks to everyone who has contributed to Fulcrum! See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get involved.
+
+<a href="https://github.com/liu-x-x-lab/fulcrum/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=liu-x-x-lab/fulcrum" alt="Contributors" />
+</a>
+
+## Contributing & license
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Licensed under the [Apache License 2.0](LICENSE).

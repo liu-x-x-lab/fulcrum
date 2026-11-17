@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+{# AI 助手设置：只有三个框和一个开关；其余额度、阈值使用平台默认值。 #}
+{% block content %}
+<section class="work-surface">
+  <div class="section-head">
+    <div><h2>AI 助手</h2></div>
+    <span class="chip {% if ready %}chip-success{% else %}chip-muted{% endif %}">{{ '已就绪' if ready else '未启用' }}</span>
+  </div>
+  <p class="muted-text">打开后，群友 @ 机器人说「我要签到」「北京天气怎么样」这类自然语言，AI 会自动调用对应功能。已有的 /命令 不受影响，也不消耗 AI 额度。说的不是功能时，机器人可以按人格设定直接聊天并记住对方：私聊在下面开启，群里在各群的「群功能」中开启。群里仍需 @ 机器人，私聊直接回复。下面的接口地址、模型、密钥是默认值，各群可以单独覆盖。</p>
+  <form method="post" action="/tenant/ai" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    {# 总开关:关闭后所有群和私聊都不触发 AI;已有的 /命令 不受影响。 #}
+    <div class="full-row gf-switch-list gf-switch-list-soft">
+      <label class="gf-row">
+        <span class="gf-row-copy"><strong>启用 AI 助手</strong><small>关闭后所有群和私聊都不会触发 AI，已有的 /命令 不受影响</small></span>
+        <span class="ui-switch">
+          <input type="checkbox" name="enabled" role="switch"{% if setting and setting.enabled %} checked{% endif %} />
+          <span class="ui-switch-track"></span>
+        </span>
+      </label>
+    </div>
+    <label><span>接口地址</span><input name="api_base" placeholder="https://api.openai.com/v1" value="{{ setting.api_base if setting else '' }}" /></label>
+    <label><span>模型</span><input name="model" placeholder="gpt-4o-mini" value="{{ setting.model if setting else '' }}" /></label>
+    <label class="full-row"><span>密钥</span><input name="api_key" type="password" autocomplete="new-password" placeholder="{{ '已配置，留空则保持不变' if key_configured else '请输入密钥' }}" /></label>
+    <div class="full-row gf-switch-list gf-switch-list-soft">
+      <label class="gf-row">
+        <span class="gf-row-copy"><strong>私聊启用聊天（人格 + 记忆）</strong><small>群里的聊天请到各群「群功能」的「AI 对话」里开启（未单独设置时跟随这里的开关），也可以给该群单独设置模型</small></span>
+        <span class="ui-switch">
+          <input type="checkbox" name="chat_enabled" role="switch"{% if setting and setting.chat_enabled %} checked{% endif %} />
+          <span class="ui-switch-track"></span>
+        </span>
+      </label>
+    </div>
+    <label class="full-row"><span>人格设定</span><textarea name="persona" rows="5" maxlength="2000" placeholder="{{ default_persona }}">{{ setting.persona if setting else '' }}</textarea></label>
+    {% if can_manage_users %}
+    <div class="full-row form-actions-inline">
+      <button class="btn" type="submit" name="action" value="save"><span class="i i-save" aria-hidden="true"></span><span>保存</span></button>
+      <button class="btn btn-secondary" type="submit" name="action" value="test">保存并测试连接</button>
+      {% if memory_count is none %}
+      <span class="muted-text">长期记忆：记忆服务未配置或暂时连不上</span>
+      {% else %}
+      <button class="btn btn-secondary" type="submit" name="action" value="clear_memory" data-confirm-mode="confirm" data-confirm-tone="danger" data-confirm-title="清空 AI 记忆" data-confirm-message="将删除 AI 记住的所有群和私聊里每个人的长期记忆，无法恢复。" data-confirm-points="之后机器人不再记得群友的称呼、喜好、计划等信息|聊天人格设定和已有的聊天记录不受影响" data-confirm-confirm-text="清空记忆">清空记忆（当前 {{ memory_count }} 个记忆库）</button>
+      {% endif %}
+    </div>
+    {% endif %}
+  </form>
+  {% if setting %}<p class="muted-text">今日已调用 {{ used_today }} / {{ setting.daily_limit }} 次</p>{% endif %}
+</section>
+
+<section class="page-section">
+  <div class="section-head"><div><h2>最近的 AI 决策</h2></div><span class="chip chip-outline">{{ decisions|length }} 条</span></div>
+  <div class="record-list">
+    {% for item in decisions %}
+    <article class="record-row">
+      <div class="record-primary">
+        <strong>{{ item.input_text }}</strong>
+        <span>{% if item.command_text %}理解为 <code>{{ item.command_text }}</code>{% else %}{{ item.reason or '未处理' }}{% endif %}</span>
+      </div>
+      <dl class="record-meta">
+        <div><dt>结果</dt><dd>{{ {'routed': '已执行', 'asked': '已追问', 'chatted': '已聊天', 'no_match': '无匹配', 'low_confidence': '把握不足', 'rejected': '已拒绝', 'error': '调用失败'}.get(item.status, item.status) }}</dd></div>
+        <div><dt>把握</dt><dd>{{ item.confidence if item.confidence is not none else '-' }}</dd></div>
+        <div><dt>时间</dt><dd>{{ format_time(item.created_at) }}</dd></div>
+      </dl>
+    </article>
+    {% else %}
+    <p class="muted-text">还没有 AI 决策记录。</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

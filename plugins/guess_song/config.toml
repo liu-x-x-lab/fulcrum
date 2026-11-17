@@ -1,0 +1,32 @@
+[plugin]
+code = "guess_song"
+display_name = "猜歌"
+plugin_type = "command"
+version = "2.0.0"
+author = "abot"
+description = "使用租户音乐服务开展群聊猜歌名游戏"
+default_enabled = false
+
+[capability]
+channel_types = ["wechat_ipad", "wechat_winauto", "telegram", "openclaw", "simulator", "workwechat", "wechat_webridge", "wechat_gugatool"]
+chat_types = ["group"]
+message_types = ["text"]
+priority = 100
+consume_policy = "continue"
+timeout_ms = 20000
+
+[matcher]
+commands = ["猜歌名"]
+require_mention = false
+
+[secrets]
+fields = ["api_key"]
+
+[runtime]
+api_base = ""
+api_key = ""
+quality = "exhigh"
+timeout_seconds = 15
+hint_seconds = 30
+game_ttl_seconds = 1800
+popular_singers = ["周杰伦", "林俊杰", "薛之谦", "陈奕迅", "邓紫棋", "李荣浩", "张学友", "刘德华", "Beyond", "孙燕姿"]

@@ -1,0 +1,50 @@
+[plugin]
+code = "robot_menu"
+display_name = "功能菜单"
+plugin_type = "command"
+version = "2.0.0"
+author = "abot"
+description = "展示当前群实际可用的机器人功能和触发方式。"
+default_enabled = false
+
+[capability]
+# 菜单只读取平台插件目录和群级范围，输出标准文本，不绑定任何渠道协议。
+channel_types = ["wechat_ipad", "wechat_winauto", "openclaw", "simulator", "telegram", "workwechat", "wechat_webridge", "wechat_gugatool"]
+chat_types = ["group"]
+message_types = ["text"]
+priority = 120
+consume_policy = "stop"
+timeout_ms = 10000
+
+[matcher]
+commands = ["菜单", "功能菜单"]
+require_mention = false
+
+[runtime]
+max_items = 30
+
+# 配置表单声明(清单 v2)
+[[config.fields]]
+key = "max_items"
+label = "菜单最多显示条数"
+kind = "number"
+default = 30
+min = 1
+max = 50
+hint = "超出的功能不会显示在菜单里。"
+group = "显示"
+
+[[config.fields]]
+key = "commands"
+label = "触发命令"
+kind = "tags"
+default = ["菜单", "功能菜单"]
+hint = "多个用逗号分隔。"
+group = "触发方式"
+
+[[config.fields]]
+key = "require_mention"
+label = "群里必须 @ 机器人才响应"
+kind = "bool"
+default = false
+group = "触发方式"

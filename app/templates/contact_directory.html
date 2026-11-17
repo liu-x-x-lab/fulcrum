@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% from '_identity.html' import identity %}
+{# 好友:所有账号的好友合在一起,一行一个好友,可直接去聊天记录。 #}
+{% block hero_actions %}
+<div class="chip-row">
+  {% include '_directory_sync.html' %}
+  {# 只读角色也能查看已保存记录；真正发起检测仍由接口校验运营权限。 #}
+  <a class="btn btn-secondary" href="/contacts/check?channel_id={{ directory.channel_id or 0 }}">好友检测</a>
+  <span class="chip chip-outline">共 {{ directory.paging.total }} 位好友</span>
+</div>
+{% endblock %}
+{% block content %}
+<section class="work-surface">
+  <form method="get" action="/contacts" class="compact-filter-form" style="margin-bottom:12px;">
+    <label class="compact-filter-field"><span>搜索</span><input type="search" name="q" value="{{ directory.keyword }}" placeholder="昵称、备注或微信号" /></label>
+    {% if channels|length > 1 %}
+    <label class="compact-filter-field"><span>账号</span>
+      <select name="channel_id">
+        <option value="0">全部</option>
+        {% for item in channels %}<option value="{{ item.id }}" {% if directory.channel_id == item.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <div class="compact-filter-actions">
+      <button class="btn btn-icon" type="submit" title="搜索" aria-label="搜索"><span class="i i-search" aria-hidden="true"></span></button>
+      {% if directory.keyword or directory.channel_id %}<a class="btn btn-secondary btn-icon" href="/contacts" title="清除" aria-label="清除"><span class="i i-x" aria-hidden="true"></span></a>{% endif %}
+    </div>
+  </form>
+
+  {% if directory.rows %}
+  <div class="table-scroll">
+  <table class="table">
+    <thead><tr><th>好友</th><th>备注</th>{% if channels|length > 1 %}<th>账号</th>{% endif %}<th class="col-compact">共同群</th><th class="col-compact">总积分</th><th class="col-action"></th></tr></thead>
+    <tbody>
+      {% for item in directory.rows %}
+      <tr>
+        <td>{{ identity(item.identity, 'lg') }}</td>
+        <td>{{ item.remark or '-' }}</td>
+        {% if channels|length > 1 %}<td class="muted-text">{{ item.channel_name }}</td>{% endif %}
+        <td class="col-compact">{{ item.group_count or '-' }}</td>
+        <td class="col-compact">{{ item.points or '-' }}</td>
+        {# 页面使用服务端统一能力判断；只读人员可以查看已有记录，不能创建新会话。 #}
+        <td class="col-action">{% if item.conversation_id %}<a class="btn btn-small btn-secondary" href="/messages?conversation_id={{ item.conversation_id }}&channel_id={{ item.channel_id }}"><span class="i i-message" aria-hidden="true"></span><span>聊天记录</span></a>{% elif can_edit and item.can_start_chat %}<form method="post" action="/contacts/{{ item.contact_id }}/chat"><input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><button class="btn btn-small btn-secondary" type="submit"><span class="i i-message" aria-hidden="true"></span><span>发起聊天</span></button></form>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% include '_pager.html' %}
+  {% else %}
+  <p class="muted-text">{{ '没有匹配的好友。' if directory.keyword or directory.channel_id else '暂无好友，点击「同步好友」获取。' if sync_channels else '还没有好友资料，请先接入账号。' }}</p>
+  {% endif %}
+</section>
+{% endblock %}

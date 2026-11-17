@@ -1,0 +1,19 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+websockets>=16.0,<17.0
+jinja2>=3.1.4
+sqlalchemy>=2.0.36
+alembic>=1.14.0
+tomli>=2.0.0,<3.0.0; python_version < "3.11"
+# Windows 不自带 IANA 时区库，ZoneInfo("Asia/Shanghai") 需要该数据包。
+tzdata>=2024.1; sys_platform == "win32"
+argon2-cffi>=23.1.0
+cryptography>=43.0.0,<47.0.0
+pymysql>=1.1.1
+pydantic>=2.9.2
+pydantic-settings>=2.5.2
+python-multipart>=0.0.9
+pydub>=0.25.1
+markdown>=3.10
+psutil>=7.2.2
+pillow>=10.0.0
