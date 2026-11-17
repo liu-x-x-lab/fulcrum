@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from sqlalchemy import select
 
-from app import main
+import app.web.chatrooms.directory as directory_routes
 from app.core.time import now_shanghai
 from app.models.entities import Channel, TaskJob
 from app.services.task_queue import parse_job_payload
@@ -16,7 +16,7 @@ from test_provider_node_pages import _login, provider_page_context  # noqa: F401
 def sync_context(provider_page_context, monkeypatch):
     client, ids = provider_page_context
     notified = []
-    monkeypatch.setattr(main.webridge_wakeup, "notify", notified.append)
+    monkeypatch.setattr(directory_routes.webridge_wakeup, "notify", notified.append)
     with ids["factory"]() as db:
         channels = [
             Channel(tenant_id=ids["alpha"], bot_id=ids["bot"], name="同步甲号", channel_type="wechat_webridge", is_enabled=True),

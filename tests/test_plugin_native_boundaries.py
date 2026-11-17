@@ -13,6 +13,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{TEST_RUNTIME / 'app.db'}"
 os.environ["LOG_DIR"] = str(TEST_RUNTIME / "logs")
 os.environ["AUTH_SEED_DEMO_USERS"] = "false"
 
+import app.web.shared.presentation as presentation
 from app import main as main_module
 from app.core.settings import settings
 from app.models.entities import Bot, Plugin
@@ -118,7 +119,7 @@ def test_plugin_pages_do_not_offer_invalid_binding_or_configuration_only_copy() 
     # 插件目录页采用紧凑列表:只在有问题时显示"暂不可用/有提示"徽标(不再给每个插件挂"可执行"),
     # 损坏的插件(manifest 有错误)明确提示不可用;详情页只有能执行的插件才提供"绑定到机器人"入口。
     assert "runtime_info.manifest_errors" in list_template and "暂不可用" in list_template
-    template = main_module.templates.env.get_template("plugin_detail.html")
+    template = presentation.templates.env.get_template("plugin_detail.html")
     # 验证实际入口，避免把安全条件的具体写法当成页面行为。
     for supports_execution in (False, True):
         for has_bindable_bot in (False, True):

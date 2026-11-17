@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from sqlalchemy import func, select
 
+import app.services.channel_adapters as channel_adapters
 from app.core.time import now_shanghai
 from app.models.entities import Bot, Channel, Conversation, Message, TaskJob, WorkWechatContact
 from app.services import channel_catalog
@@ -21,11 +22,9 @@ def _friend(db, ids, *, channel_id=None, external_id="new-friend", tenant_id=Non
 def test_all_current_channels_create_and_reuse_direct_chat(provider_page_context, monkeypatch):  # noqa: F811
     """遍历正式渠道，从好友列表真实点击；同名好友在其他账号的会话不能被复用。"""
 
-    import app.main as main
-
     client, ids = provider_page_context
     csrf = _login(client, "operator")
-    monkeypatch.setattr(main, "dispatch_outbound_message", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("创建会话不得发送消息")))
+    monkeypatch.setattr(channel_adapters, "dispatch_outbound_message", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("创建会话不得发送消息")))
     for channel_type in channel_catalog.list_supported_channel_types():
         with ids["factory"]() as db:
             channel = Channel(tenant_id=ids["alpha"], bot_id=ids["bot"], name=channel_type,

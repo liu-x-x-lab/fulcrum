@@ -20,11 +20,8 @@ from app.services.login_proxy_pool import (
     rotate_login_proxy_before_qrcode,
 )
 from app.services.wechat_ipad.client import WechatIpadApiClient
-from app.services.wechat_ipad.service import (
-    build_wechat_ipad_overview,
-    poll_wechat_ipad_login_status,
-    start_wechat_ipad_login,
-)
+from app.services.wechat_ipad.views.overview import build_wechat_ipad_overview
+from app.services.wechat_ipad.operations.login import poll_wechat_ipad_login_status, start_wechat_ipad_login
 
 
 class WechatIpadLoginFlowError(ValueError):

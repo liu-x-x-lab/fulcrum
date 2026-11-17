@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import app.core.db as db_module
 from app.api import tool_api
 from app.core.db import Base
 from app.core.tenant_context import require_tenant_id
@@ -47,7 +48,7 @@ def screenshot_application_client(screenshot_client, monkeypatch):
     import app.main as main_module
 
     _router_client, tenant_id = screenshot_client
-    monkeypatch.setattr(main_module, "SessionLocal", tool_api.SessionLocal)
+    monkeypatch.setattr(db_module, "SessionLocal", tool_api.SessionLocal)
     monkeypatch.setattr(main_module, "is_setup_required", lambda _db: False)
     monkeypatch.setattr(
         main_module,

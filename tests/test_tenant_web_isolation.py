@@ -37,7 +37,6 @@ def tenant_web_context(tmp_path, monkeypatch):
     monkeypatch.setattr(db_module, "SessionLocal", factory)
     monkeypatch.setattr(db_module, "TenantSessionLocal", factory)
     monkeypatch.setattr(main_module, "SessionLocal", factory)
-    monkeypatch.setattr(main_module, "TenantSessionLocal", factory)
     monkeypatch.setattr(main_module, "init_db_with_seed", lambda _db: None)
     monkeypatch.setattr(main_module, "is_setup_required", lambda _db: False)
     # 该聚焦隔离测试使用手工创建的临时结构并跳过应用初始化，因此测试夹具需要

@@ -8,7 +8,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-import app.main as main_module
+import app.web.channels.actions as channel_actions
+import app.web.chatrooms.management as chatroom_management
 from app.core.time import now_shanghai
 from app.models.entities import Bot, Channel, TaskJob
 from app.services.wechat_webridge.contract import JOB_TYPE
@@ -219,7 +220,7 @@ def test_cloud_group_sync_tracks_both_jobs_and_reports_a_mixed_result(webridge_g
         channel.channel_type = "workwechat"
         channel.adapter_config_json = json.dumps({"workwechat_delivery_mode": "cloud_poll"})
         db.commit()
-    monkeypatch.setattr(main_module, "notify_cloud_job_enqueued", lambda _channel, _job: None)
+    monkeypatch.setattr(chatroom_management, "notify_cloud_job_enqueued", lambda _channel, _job: None)
     response = client.post(f"/channels/{channel_id}/chatrooms/{room_id}/sync", headers=_headers(csrf))
     assert response.status_code == 200
     queued = response.json()
@@ -250,10 +251,15 @@ def test_ipad_failed_group_targets_return_json_failure(webridge_group, monkeypat
     with ids["factory"]() as db:
         db.get(Channel, channel_id).channel_type = "wechat_ipad"
         db.commit()
-    monkeypatch.setattr(main_module, "sync_wechat_ipad_chatrooms", lambda _db, _channel, **_kwargs: {
-        "last_status_summary": "群资料同步未完成",
-        "runtime_info": {"last_chatroom_sync_failed_targets": ["1@chatroom"]},
-    })
+    # 两个入口分属渠道操作和群管理，分别替换各自实际查找的同步服务。
+    def failed_sync(_db, _channel, **_kwargs):
+        return {
+            "last_status_summary": "群资料同步未完成",
+            "runtime_info": {"last_chatroom_sync_failed_targets": ["1@chatroom"]},
+        }
+
+    monkeypatch.setattr(channel_actions, "sync_wechat_ipad_chatrooms", failed_sync)
+    monkeypatch.setattr(chatroom_management, "sync_wechat_ipad_chatrooms", failed_sync)
     for path in (f"/channels/{channel_id}/wechat-ipad/sync-chatrooms", f"/channels/{channel_id}/chatrooms/{room_id}/sync"):
         response = client.post(path, headers=_headers(csrf))
         assert response.status_code == 200

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-import app.main as main_module
+import app.web.dashboard as dashboard_web
 
 from app.core.tenant_context import tenant_scope
 from app.core.tenant_db import tenant_session
@@ -65,10 +65,8 @@ def test_manual_bot_creation_route_and_button_are_removed(provider_page_context)
     assert page.status_code == 200
     assert "新建机器人" not in page.text
     assert 'action="/bots"' not in page.text
-    assert not any(
-        getattr(route, "path", "") == "/bots" and "POST" in (getattr(route, "methods", None) or set())
-        for route in main_module.app.routes
-    )
+    # 验证实际 HTTP 分派，避免领域 Router 嵌套后只遍历主应用而漏检写入口。
+    assert client.post("/bots").status_code == 405
 
 
 def test_dashboard_with_hourly_messages_renders_real_trend(provider_page_context) -> None:
@@ -84,7 +82,7 @@ def test_dashboard_with_hourly_messages_renders_real_trend(provider_page_context
         ))
         db.commit()
         # 同时检查返回的聚合值，避免仅靠 HTTP 200 掩盖趋势数据被跳过的问题。
-        series = main_module.build_dashboard_trend_series(db, hours=24)
+        series = dashboard_web.build_dashboard_trend_series(db, hours=24)
         assert series["inbound_chart"]["max_value"] == 37
 
     _login(client, "admin")

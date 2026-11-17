@@ -317,7 +317,8 @@ def test_wechat_ipad_catalog_uses_platform_managed_endpoint_without_unused_token
 def test_tenant_routes_remove_retired_channel_proxy_and_technical_login_actions() -> None:
     """租户主路由只保留业务化登录会话，不得继续注册渠道长期代理和旧技术动作。"""
 
-    source = Path("app/main.py").read_text(encoding="utf-8")
+    # 路由已按业务拆开，扫描当前所有浏览器入口，避免只检查空的装配层而漏报。
+    source = "\n".join(path.read_text(encoding="utf-8") for path in Path("app/web").rglob("*.py"))
 
     assert "extract_" + "wechat_ipad_proxy_form" not in source
     assert "\n    proxy_host: str = Form" not in source

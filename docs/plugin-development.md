@@ -183,6 +183,8 @@ Helpers follow the caller's transaction boundary and do not close its session.
 | Small JSON state | [`PluginStateStore`](../app/services/plugin_runtime/state_store.py): tenant + binding, namespace/key, 64 KiB per record, optional expiry |
 | Rate limits | [`PluginRateLimiter`](../app/services/plugin_runtime/rate_limit.py): appropriate user/conversation scope |
 | Conversation history | [`PluginMessageReader`](../app/services/plugin_runtime/messages.py) |
+| Long-term AI memory | [`ai_memory.py`](../app/services/ai_memory.py), existing chat/digest integration; see [Hindsight contract](architecture.md#hindsight) |
+| Web/HTML and Markdown screenshots | [`web_screenshots.py`](../app/services/web_screenshots.py), [`markdown_to_image.py`](../app/core/markdown_to_image.py); see [Kitesurf contract](architecture.md#kitesurf) |
 | Text generation | [`PluginTextGenerationClient`](../app/services/plugin_runtime/text_generation.py) |
 | Member display names | [`member_names`](../app/services/plugin_runtime/member_names.py) |
 | Authorized media/resources | [`media.py`](../plugins/_shared/media.py), [`resources.py`](../plugins/_shared/resources.py) |

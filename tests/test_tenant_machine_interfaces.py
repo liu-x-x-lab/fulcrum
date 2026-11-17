@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
 
-import app.main as main_app
+import app.api.channel_webhooks as channel_webhooks
 import app.services.async_workers as async_workers
 from app.core.db import Base
 from app.core.tenant_context import tenant_scope
@@ -169,8 +169,8 @@ def test_webhook_signature_rejection_is_recorded_in_channel_tenant(machine_db, m
         db.commit()
         channel_id = int(channel.id)
 
-    monkeypatch.setattr(main_app, "SessionLocal", machine_db)
-    monkeypatch.setattr(main_app, "TenantSessionLocal", machine_db)
+    monkeypatch.setattr(channel_webhooks, "SessionLocal", machine_db)
+    monkeypatch.setattr(channel_webhooks, "TenantSessionLocal", machine_db)
     body = b"{}"
     consumed = False
 
@@ -190,7 +190,7 @@ def test_webhook_signature_rejection_is_recorded_in_channel_tenant(machine_db, m
         },
         receive,
     )
-    response = asyncio.run(main_app.inbound_webhook(channel_id, request))
+    response = asyncio.run(channel_webhooks.inbound_webhook(channel_id, request))
 
     assert response.status_code == 401
     with tenant_scope(tenant_id), tenant_session(machine_db) as db:
