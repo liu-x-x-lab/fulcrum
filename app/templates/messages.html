@@ -1,10 +1,11 @@
 {% extends 'base.html' %}
 {% from '_message_rows.html' import message_rows %}
+{% block back %}{% if back_href %}<a class="page-back" href="{{ back_href }}" title="返回列表" aria-label="返回列表"><span class="i i-arrow-left" aria-hidden="true"></span></a>{% endif %}{% endblock %}
 {% block hero_actions %}
 <div class="hero-action-cluster">
   {# 会话类型切换:全部 / 群聊 / 私聊 / 公众号。公众号单独成类,不再混在私聊里。 #}
   <nav class="msg-kind-tabs" aria-label="会话类型">
-    {% for tab in kind_tabs %}<a class="msg-kind-tab{% if tab.active %} active{% endif %}" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %} title="{{ tab.label }}"><span class="i i-{{ tab.icon }}" aria-hidden="true"></span><span>{{ tab.label }}</span></a>{% endfor %}
+    {% for tab in kind_tabs %}<a class="msg-kind-tab{% if tab.active %} active{% endif %}" href="{{ tab.href }}{% if return_to %}{{ '&' if '?' in tab.href else '?' }}return_to={{ return_to|urlencode }}{% endif %}"{% if tab.active %} aria-current="page"{% endif %} title="{{ tab.label }}"><span class="i i-{{ tab.icon }}" aria-hidden="true"></span><span>{{ tab.label }}</span></a>{% endfor %}
   </nav>
   {% if selected_total is not none %}<span class="chip chip-outline">消息 {{ selected_total }}</span>{% endif %}
 </div>
@@ -14,7 +15,7 @@
 <section class="msg-center" id="msg-center" data-conversation-id="{{ selected_conversation_id or '' }}" data-has-more="{{ 1 if has_more_messages else 0 }}" data-bot-id="{{ bot_id or '' }}" data-channel-id="{{ channel_id or '' }}" data-filter-chat-type="{{ chat_type or '' }}" data-chat-type="{% for item in conversation_summaries %}{% if item.conversation.id == selected_conversation_id %}{{ item.conversation.chat_type }}{% endif %}{% endfor %}">
   <aside class="wechat-conversation-list" aria-label="会话列表">
     {% for item in conversation_summaries %}
-    <a class="wechat-conversation-item{% if item.conversation.id == selected_conversation_id %} active{% endif %}" data-conversation-id="{{ item.conversation.id }}" href="/messages?conversation_id={{ item.conversation.id }}{% if channel_id %}&channel_id={{ channel_id }}{% endif %}{% if bot_id %}&bot_id={{ bot_id }}{% endif %}{% if chat_type %}&chat_type={{ chat_type }}{% endif %}">
+    <a class="wechat-conversation-item{% if item.conversation.id == selected_conversation_id %} active{% endif %}" data-conversation-id="{{ item.conversation.id }}" href="/messages?conversation_id={{ item.conversation.id }}{% if channel_id %}&channel_id={{ channel_id }}{% endif %}{% if bot_id %}&bot_id={{ bot_id }}{% endif %}{% if chat_type %}&chat_type={{ chat_type }}{% endif %}{% if return_to %}&return_to={{ return_to|urlencode }}{% endif %}">
       <span class="wechat-avatar">{% if item.identity.avatar_url %}<img src="{{ item.identity.avatar_url }}" alt="" referrerpolicy="no-referrer" />{% else %}{{ item.initial }}{% endif %}</span>
       <span class="wechat-conversation-copy">
         <span class="wechat-conversation-head">

@@ -13,6 +13,7 @@
 {% endblock %}
 {% block content %}
 {% set base = '/channels/' ~ channel.id ~ '/wechat-webridge' %}
+{% set list_return_to = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
 {# iPhone 状态：顶部一行精简摘要（每 10 秒自动刷新），完整信息与趋势折叠在“展开详情”。 #}
 <section class="work-surface" id="device-summary" data-live-url="{{ base }}/live">
   <div class="toolbar">
@@ -76,17 +77,17 @@
 
   {% if dashboard.tab == 'contacts' %}
     {% if dashboard.rows %}<table class="table"><thead><tr><th>好友</th><th>备注</th><th class="col-time">最近同步</th><th class="col-action">操作</th></tr></thead><tbody>
-    {% for item in dashboard.rows %}<tr><td>{{ identity(item.identity, 'lg') }}</td><td>{{ item.remark or '-' }}</td><td class="col-time">{{ item.last_synced_at|bj_time if item.last_synced_at else '-' }}</td><td class="col-action">{% if item.conversation_id %}<a class="btn btn-small" href="/messages?conversation_id={{ item.conversation_id }}&channel_id={{ channel.id }}"><span class="i i-message" aria-hidden="true"></span><span>聊天记录</span></a>{% else %}<span class="muted-text">暂无会话</span>{% endif %}</td></tr>{% endfor %}
+    {% for item in dashboard.rows %}<tr><td>{{ identity(item.identity, 'lg') }}</td><td>{{ item.remark or '-' }}</td><td class="col-time">{{ item.last_synced_at|bj_time if item.last_synced_at else '-' }}</td><td class="col-action">{% if item.conversation_id %}<a class="btn btn-small" href="/messages?conversation_id={{ item.conversation_id }}&channel_id={{ channel.id }}&return_to={{ list_return_to|urlencode }}"><span class="i i-message" aria-hidden="true"></span><span>聊天记录</span></a>{% else %}<span class="muted-text">暂无会话</span>{% endif %}</td></tr>{% endfor %}
     </tbody></table>{% else %}<p class="muted-text">{{ '没有匹配的好友' if dashboard.keyword else '暂无好友资料，点击右上角“同步好友”。' }}</p>{% endif %}
 
   {% elif dashboard.tab == 'groups' %}
     {% if dashboard.rows %}<table class="table"><thead><tr><th>群组</th><th>成员数</th><th class="col-time">最近同步</th><th class="col-action">操作</th></tr></thead><tbody>
-    {% for item in dashboard.rows %}<tr><td>{{ identity(item.identity, 'lg') }}</td><td>{{ item.member_count or '-' }}</td><td class="col-time">{{ item.last_synced_at|bj_time if item.last_synced_at else '-' }}</td><td class="col-action">{% if item.conversation_id %}<a class="btn btn-small" href="/messages?conversation_id={{ item.conversation_id }}&channel_id={{ channel.id }}"><span class="i i-message" aria-hidden="true"></span><span>聊天记录</span></a> {% endif %}<a class="btn btn-small" href="/channels/{{ channel.id }}/chatrooms/{{ item.room_id }}">群详情</a></td></tr>{% endfor %}
+    {% for item in dashboard.rows %}<tr><td>{{ identity(item.identity, 'lg') }}</td><td>{{ item.member_count or '-' }}</td><td class="col-time">{{ item.last_synced_at|bj_time if item.last_synced_at else '-' }}</td><td class="col-action">{% if item.conversation_id %}<a class="btn btn-small" href="/messages?conversation_id={{ item.conversation_id }}&channel_id={{ channel.id }}&return_to={{ list_return_to|urlencode }}"><span class="i i-message" aria-hidden="true"></span><span>聊天记录</span></a> {% endif %}<a class="btn btn-small" href="/channels/{{ channel.id }}/chatrooms/{{ item.room_id }}?return_to={{ list_return_to|urlencode }}">群详情</a></td></tr>{% endfor %}
     </tbody></table>{% else %}<p class="muted-text">{{ '没有匹配的群组' if dashboard.keyword else '暂无群组资料，点击右上角“同步群组”。' }}</p>{% endif %}
 
   {% elif dashboard.tab == 'members' %}
     {% if dashboard.rows %}<table class="table"><thead><tr><th>成员</th><th>所在群</th><th>角色</th><th class="col-time">最近同步</th></tr></thead><tbody>
-    {% for item in dashboard.rows %}<tr><td>{{ identity(item.identity) }}</td><td><a href="/channels/{{ channel.id }}/chatrooms/{{ item.room_id }}">{{ identity(item.room) }}</a></td><td>{{ item.role or '-' }}</td><td class="col-time">{{ item.last_synced_at|bj_time if item.last_synced_at else '-' }}</td></tr>{% endfor %}
+    {% for item in dashboard.rows %}<tr><td>{{ identity(item.identity) }}</td><td><a href="/channels/{{ channel.id }}/chatrooms/{{ item.room_id }}?return_to={{ list_return_to|urlencode }}">{{ identity(item.room) }}</a></td><td>{{ item.role or '-' }}</td><td class="col-time">{{ item.last_synced_at|bj_time if item.last_synced_at else '-' }}</td></tr>{% endfor %}
     </tbody></table>{% else %}<p class="muted-text">{{ '没有匹配的群成员' if dashboard.keyword else '暂无群成员，请在群详情里同步成员。' }}</p>{% endif %}
 
   {% else %}
@@ -97,21 +98,14 @@
     {% else %}<p class="muted-text">{{ '没有匹配的消息' if (dashboard.keyword or dashboard.sender or dashboard.conversation_id) else '暂无消息记录。' }}</p>{% endif %}
   {% endif %}
 
-  {% set pg = dashboard.pagination %}
-  {% if pg.total_pages > 1 %}
-  {# 翻页需要保留所有筛选条件。 #}
-  {% set qs = ('&keyword=' ~ (dashboard.keyword|urlencode) if dashboard.keyword else '') ~ ('&sender=' ~ (dashboard.sender|urlencode) if dashboard.sender else '') ~ ('&conversation_id=' ~ dashboard.conversation_id if dashboard.conversation_id else '') %}
-  <div class="list-pagination"><div class="list-pagination-summary">第 {{ pg.page }} / {{ pg.total_pages }} 页，共 {{ pg.total }} 条{% if dashboard.tab == 'messages' %}（第 1 页为最新）{% endif %}</div>
-  <div class="list-pagination-actions">
-    {% if dashboard.tab == 'messages' %}
-      {% if pg.has_next %}<a class="btn btn-secondary" href="{{ base }}?tab=messages&page={{ pg.next_page }}{{ qs }}">更早</a>{% endif %}
-      {% if pg.has_prev %}<a class="btn btn-secondary" href="{{ base }}?tab=messages&page={{ pg.prev_page }}{{ qs }}">更新</a>{% endif %}
-    {% else %}
-      {% if pg.has_prev %}<a class="btn btn-secondary btn-icon" href="{{ base }}?tab={{ dashboard.tab }}&page={{ pg.prev_page }}{{ qs }}" title="上一页" aria-label="上一页"><span class="i i-chevron-left" aria-hidden="true"></span></a>{% endif %}
-      {% if pg.has_next %}<a class="btn btn-secondary btn-icon" href="{{ base }}?tab={{ dashboard.tab }}&page={{ pg.next_page }}{{ qs }}" title="下一页" aria-label="下一页"><span class="i i-chevron-right" aria-hidden="true"></span></a>{% endif %}
-    {% endif %}
-  </div></div>
+  {% set paging = dashboard.pagination %}
+  {% set pager_label = '微桥' ~ {'contacts': '好友', 'groups': '群组', 'members': '群成员', 'messages': '消息'}[dashboard.tab] ~ '分页' %}
+  {% if dashboard.tab == 'messages' %}
+    {% set pager_prev_label = '上一页（更新）' %}
+    {% set pager_next_label = '下一页（更早）' %}
+    <p class="muted-text top-gap">第 1 页为最新消息。</p>
   {% endif %}
+  {% include '_pager.html' %}
 </section>
 {% endblock %}
 {% block scripts %}

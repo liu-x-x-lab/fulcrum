@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
+from starlette.datastructures import URL
 from starlette.routing import Match
 
 from app.api import channel_inbound_router, channel_outbound_router, wechat_webridge_router, customer_operations_router, guga_agent_router, open_api_router, open_media_router, open_messages_router, open_resources_router, payment_webhook_router, provider_router, tool_api_router, workwechat_provider_cloud_router
@@ -223,6 +224,7 @@ from app.web.auth_common import (
     TENANT_SESSION_COOKIE,
     platform_must_change_password_redirect,
     require_tenant_csrf,
+    safe_return_to,
     tenant_must_change_password_redirect,
 )
 from app.web.tenant_navigation import build_tenant_navigation
@@ -421,20 +423,24 @@ def current_path_with_query(request: Request) -> str:
     return f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path
 
 
-def safe_return_to(value: str | None, fallback: str) -> str:
-    candidate = (value or "").strip()
-    if not candidate:
-        return fallback
-    parsed = urlsplit(candidate)
-    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/") or candidate.startswith("//"):
-        return fallback
-    return candidate
-
-
 def build_context_href(path: str, return_to: str = "") -> str:
     """生成站内链接；机器人环境已删除，只保留必要的返回地址。"""
 
     return build_url(path, return_to=return_to)
+
+
+def _preserve_return_to(request: Request, target: str) -> str:
+    """详情表单跳转后继续携带来源；只从同源的当前详情页补取返回地址。"""
+
+    return_to = safe_return_to(request.query_params.get("return_to"), "")
+    if not return_to:
+        try:
+            referer = URL(request.headers.get("referer", ""))
+            if (referer.scheme, referer.netloc, referer.path) == (request.url.scheme, request.url.netloc, URL(target).path):
+                return_to = safe_return_to(dict(parse_qsl(referer.query)).get("return_to"), "")
+        except ValueError:
+            pass
+    return str(URL(target).include_query_params(return_to=return_to)) if return_to else target
 
 
 templates.env.globals["context_href"] = build_context_href
@@ -537,6 +543,8 @@ def render(request: Request, template: str, **context):
         "app_started_at": APP_STARTED_AT,
         "notice_tone": notice_tone,
         "module_links": build_module_links(),
+        "current_list_url": current_path_with_query(request),
+        "return_to": safe_return_to(request.query_params.get("return_to"), ""),
     }
     base_context.update(navigation_context)
     base_context.update(context)
@@ -578,6 +586,7 @@ async def _require_operation_csrf(db: Session, request: Request) -> None:
 def _completed_operation_response(request: Request, message: str, redirect_url: str, *, ok: bool = True):
     if _operation_json_requested(request):
         return JSONResponse({"ok": ok, "done": True, "summary": message, "successful": int(ok), "failed": int(not ok), "jobs": [], "refresh": ok})
+    redirect_url = _preserve_return_to(request, redirect_url)
     separator = "&" if "?" in redirect_url else "?"
     return RedirectResponse(url=f"{redirect_url}{separator}notice={quote(message)}&tone={'success' if ok else 'danger'}", status_code=303)
 
@@ -588,6 +597,7 @@ def _queued_operation_response(request: Request, db: Session, channel: Channel, 
     result["status_url"] = f"/channels/{channel.id}/operations/status?job_ids={job_ids}"
     if _operation_json_requested(request):
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    redirect_url = _preserve_return_to(request, redirect_url)
     separator = "&" if "?" in redirect_url else "?"
     return RedirectResponse(url=f"{redirect_url}{separator}operation_jobs={job_ids}&operation_channel={channel.id}", status_code=303)
 
@@ -2472,6 +2482,7 @@ async def channel_chatroom_detail_page(request: Request, channel_id: int, chatro
             channel=channel,
             chatroom=chatroom,
             detail=detail,
+            back_href=safe_return_to(request.query_params.get("return_to"), f"/chatrooms?channel_id={channel.id}"),
             # 群详情分为 功能/插件/成员/消息/资料 五个标签，非法值回落到功能。
             tab=tab if tab in ("features", "plugins", "members", "profile") else "features",
             # 没单独保存过设置的能力跟随默认值:AI 对话跟随租户「AI 助手」里的聊天开关。
@@ -2713,7 +2724,7 @@ async def contact_directory_page(request: Request, q: str = "", channel_id: int 
 
 
 @app.post("/contacts/{contact_id}/chat")
-async def start_contact_chat(request: Request, contact_id: int, csrf_token: str = Form("")):
+async def start_contact_chat(request: Request, contact_id: int, csrf_token: str = Form(""), return_to: str = Form("")):
     """从好友列表发起私聊:已有会话直接复用,没有就建一条再进消息中心。"""
 
     enforce_role(request, "ops")
@@ -2770,7 +2781,7 @@ async def start_contact_chat(request: Request, contact_id: int, csrf_token: str 
             db.flush()
             record_audit(db, "contact.start-chat", "conversation", conversation.id, f"channel={channel.id} contact={contact.id}")
             db.commit()
-        return RedirectResponse(url=f"/messages?conversation_id={conversation.id}&channel_id={channel.id}", status_code=303)
+        return RedirectResponse(url=build_url("/messages", conversation_id=conversation.id, channel_id=channel.id, return_to=safe_return_to(return_to, "")), status_code=303)
     finally:
         db.close()
 
@@ -2818,6 +2829,7 @@ async def points_ledger_page(request: Request, q: str = "", group_id: str = "", 
             directory=directory,
             groups=group_options(db),
             pager_base=_directory_pager_base("/points/ledger", q=directory["keyword"], group_id=group_id, source=source),
+            back_href=safe_return_to(request.query_params.get("return_to"), "/points"),
         )
     finally:
         db.close()
@@ -3723,7 +3735,7 @@ async def sync_chatroom_invitations_action(request: Request, channel_id: int, ch
         record_audit(db, "channel.wechat_webridge.chatroom.invitations.sync", "chatroom", room.id, result["summary"])
         if _operation_json_requested(request):
             return JSONResponse({"ok": True, **result}, headers={"Cache-Control": "no-store"})
-        return RedirectResponse(url=return_url, status_code=303)
+        return RedirectResponse(url=_preserve_return_to(request, return_url), status_code=303)
     finally:
         db.close()
 
@@ -3916,7 +3928,7 @@ async def update_channel_chatroom_management_action(
         # 列表页行内开关带 next 回到列表;只接受站内路径,防止开放重定向。
         target = next if next.startswith("/") and not next.startswith("//") else f"/channels/{channel_id}/chatrooms/{chatroom_id}"
         separator = "&" if "?" in target else "?"
-        return RedirectResponse(url=f"{target}{separator}notice={quote(message)}", status_code=303)
+        return RedirectResponse(url=_preserve_return_to(request, f"{target}{separator}notice={quote(message)}"), status_code=303)
     finally:
         db.close()
 
@@ -4077,7 +4089,7 @@ async def save_chatroom_plugin_settings_action(request: Request, channel_id: int
         record_audit(db, 'channel.chatroom-plugin.settings', 'group_plugin_scope', bot_plugin_id, f'chatroom={room.id}, operator={user.user_id}')
         if request.headers.get('X-Requested-With') == 'fetch':
             return JSONResponse(jsonable_encoder({'ok':True, 'notice':'本群插件设置已保存', 'settings':group_plugin_settings_view(db, channel, room, binding)}))
-        return RedirectResponse(url=f'/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote("本群插件设置已保存")}', status_code=303)
+        return RedirectResponse(url=_preserve_return_to(request, f'/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote("本群插件设置已保存")}'), status_code=303)
     finally:
         db.close()
 
@@ -4101,7 +4113,7 @@ async def reset_chatroom_plugin_settings_action(request: Request, channel_id: in
         record_audit(db, 'channel.chatroom-plugin.settings.reset', 'group_plugin_scope', bot_plugin_id, f'chatroom={room.id}, operator={user.user_id}')
         if request.headers.get('X-Requested-With') == 'fetch':
             return JSONResponse(jsonable_encoder({'ok':True, 'notice':'配置已恢复默认，本群启停保持不变', 'settings':group_plugin_settings_view(db, channel, room, binding)}))
-        return RedirectResponse(url=f'/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote("配置已恢复默认，本群启停保持不变")}', status_code=303)
+        return RedirectResponse(url=_preserve_return_to(request, f'/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote("配置已恢复默认，本群启停保持不变")}'), status_code=303)
     finally:
         db.close()
 
@@ -4155,7 +4167,7 @@ async def enable_wechat_ipad_chatroom_scope_action(request: Request, channel_id:
         db.commit()
         message = "已将该群的插件草稿作用域设为启用"
         record_audit(db, f"channel.{channel.channel_type}.chatroom-scope.enable", "group_plugin_scope", bot_plugin_id, f"chatroom={chatroom.id}")
-        return RedirectResponse(url=f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}", status_code=303)
+        return RedirectResponse(url=_preserve_return_to(request, f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}"), status_code=303)
     finally:
         db.close()
 
@@ -4209,7 +4221,7 @@ async def disable_wechat_ipad_chatroom_scope_action(request: Request, channel_id
         db.commit()
         message = "已将该群的插件草稿作用域设为停用"
         record_audit(db, f"channel.{channel.channel_type}.chatroom-scope.disable", "group_plugin_scope", bot_plugin_id, f"chatroom={chatroom.id}")
-        return RedirectResponse(url=f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}", status_code=303)
+        return RedirectResponse(url=_preserve_return_to(request, f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}"), status_code=303)
     finally:
         db.close()
 
@@ -4260,7 +4272,7 @@ async def reset_wechat_ipad_chatroom_scope_action(request: Request, channel_id: 
         db.commit()
         message = "已恢复继承 bot_plugin 绑定状态"
         record_audit(db, f"channel.{channel.channel_type}.chatroom-scope.reset", "group_plugin_scope", bot_plugin_id, f"chatroom={chatroom.id}")
-        return RedirectResponse(url=f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}", status_code=303)
+        return RedirectResponse(url=_preserve_return_to(request, f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}"), status_code=303)
     finally:
         db.close()
 
@@ -4388,13 +4400,13 @@ async def set_wechat_ipad_chatroom_scope_mode_action(
         if request.headers.get("X-Requested-With") == "fetch":
             # custom:这个群是否单独设置过(启用/停用都算自定义,恢复默认才回到继承),页面据此显示"本群已自定义"和"恢复默认"。
             return JSONResponse({"ok": True, "notice": message, "mode": normalized_mode, "custom": normalized_mode != "inherited"})
-        return RedirectResponse(url=f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}", status_code=303)
+        return RedirectResponse(url=_preserve_return_to(request, f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}"), status_code=303)
     except ValueError as exc:
         db.rollback()
         # 服务层会在绑定和群不匹配等数据异常时抛 ValueError；这里转成页面提示，避免按钮操作直接落到 500 错误页。
         if request.headers.get("X-Requested-With") == "fetch":
             return JSONResponse({"ok": False, "notice": f"群权限保存失败：{exc}"}, status_code=400)
-        return RedirectResponse(url=f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote('群权限保存失败：' + str(exc))}", status_code=303)
+        return RedirectResponse(url=_preserve_return_to(request, f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote('群权限保存失败：' + str(exc))}"), status_code=303)
     finally:
         db.close()
 
@@ -5454,6 +5466,7 @@ async def messages_page(
             conversation_summaries=conversation_summaries,
             selected_conversation_id=conversation_id,
             selected_chatroom=selected_chatroom,
+            back_href=safe_return_to(request.query_params.get("return_to"), ""),
             bot_id=bot_id,
             channel_id=channel_id,
             chat_type=normalize_kind(chat_type),

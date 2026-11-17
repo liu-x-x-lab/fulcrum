@@ -32,6 +32,8 @@
 .contact-check-pagination label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .contact-check-pagination label .ui-select { width: 76px; flex: 0 0 76px; }
 .contact-check-pagination select { width: 76px; padding: 6px 10px; min-height: 34px; }
+.contact-check-pagination .list-pagination-actions { align-items: center; flex-wrap: wrap; }
+.contact-check-page-jump { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; }
 .contact-check-action-status { overflow-wrap: anywhere; margin-bottom: 8px; }
 .contact-check-remark-modal { width: min(460px, calc(100vw - 32px)); }
 .contact-check-remark-preview { overflow-wrap: anywhere; }
@@ -41,6 +43,7 @@
   .contact-check-controls .compact-filter-actions .btn { flex: 1 1 auto; }
   .contact-check-batch-actions { width: 100%; margin-left: 0; }
   .contact-check-batch-actions .btn { flex: 1; }
-  .contact-check-pagination .list-pagination-actions { width: 100%; justify-content: space-between; }
+  .contact-check-pagination .list-pagination-actions { width: 100%; }
+  .contact-check-page-jump { flex-basis: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .contact-check-progress progress::-webkit-progress-value { transition: none; } }

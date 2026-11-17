@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
@@ -105,6 +106,24 @@ def build_auth_page_context(
     }
     context.update(extra)
     return context
+
+
+def safe_return_to(value: str | None, fallback: str) -> str:
+    """返回链接只接受站内路径，供主页面和独立路由共同使用。"""
+
+    candidate = (value or "").strip()
+    if not candidate:
+        return fallback
+    # 浏览器会把反斜杠当作斜杠，不能让返回链接绕过站内地址校验。
+    if "\\" in candidate or any(ord(char) < 32 for char in candidate):
+        return fallback
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return fallback
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/") or candidate.startswith("//"):
+        return fallback
+    return candidate
 
 
 def request_ip_address(request: Request) -> str | None:

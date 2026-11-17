@@ -14,6 +14,7 @@ import pytest
 from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, select_autoescape
 
 from app.services.message_view import preview
+from app.services.conversation_kinds import KIND_LABELS
 
 playwright = pytest.importorskip("playwright.sync_api")
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,7 +95,8 @@ class MessagePage:
 
     def html(self):
         return self.env.get_template("messages.html").render(
-            conversation_summaries=([{"conversation": self.conversation, "identity": {}, "display_name": "测试群聊", "initial": "测", "latest": self.messages[-1]}] if self.messages else []),
+            conversation_summaries=([{"conversation": self.conversation, "identity": {}, "display_name": "测试群聊", "initial": "测", "latest": self.messages[-1], "kind": self.conversation.chat_type}] if self.messages else []),
+            kind_labels=KIND_LABELS,
             selected_conversation_id=7 if self.selected else None, has_more_messages=False, selected_chatroom=None, channel_id=0,
             messages=self.messages, message_identities=self.identities, message_views=self.views, csrf_token="test-csrf",
         )
@@ -282,12 +284,15 @@ def test_polling_removes_reconciled_echo_and_keeps_genuine_repeated_text(page):
 
 def test_conversation_list_discovers_first_conversation_and_updates_preview(page):
     screen = MessagePage(page, count=0, selected=False)
+    source = "/contacts?q=分页好友&page=5"
+    page.evaluate("url => history.replaceState(null, '', '/messages?return_to=' + encodeURIComponent(url))", source)
     playwright.expect(page.locator(".wechat-conversation-list")).to_contain_text("暂无会话消息")
     screen.conversation_items = [{"id": 9, "display_name": "新朋友", "preview": "第一条消息", "time": "12:30", "avatar_url": "", "initial": "新"}]
     page.clock.fast_forward(10_100)
     item = page.locator('.wechat-conversation-item[data-conversation-id="9"]')
     playwright.expect(item).to_contain_text("第一条消息")
     assert "conversation_id=9" in item.get_attribute("href")
+    assert parse_qs(urlsplit(item.get_attribute("href")).query)["return_to"] == [source]
     screen.conversation_items[0]["preview"] = "新收到的图片"
     page.clock.fast_forward(10_100)
     playwright.expect(item).to_contain_text("新收到的图片")

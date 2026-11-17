@@ -20,6 +20,7 @@ from app.web.auth_common import (
     TENANT_PASSWORD_PATH,
     build_auth_page_context,
     require_tenant_csrf,
+    safe_return_to,
 )
 from app.web.tenant_navigation import build_tenant_navigation
 
@@ -82,6 +83,7 @@ def contact_check_page(request: Request, channel_id: int = 0):
             current_user=principal,
             channels=channels,
             selected_channel_id=selected,
+            back_href=safe_return_to(request.query_params.get("return_to"), "/contacts"),
             can_edit=has_tenant_role(principal, "operator"),
             csrf_token=request.cookies.get(TENANT_CSRF_COOKIE, ""),
             password_action=TENANT_PASSWORD_PATH,

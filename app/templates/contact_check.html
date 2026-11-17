@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block back %}<a class="page-back" href="/contacts" title="返回好友列表" aria-label="返回好友列表"><span class="i i-arrow-left" aria-hidden="true"></span></a>{% endblock %}
+{% block back %}<a class="page-back" href="{{ back_href }}" title="返回好友列表" aria-label="返回好友列表"><span class="i i-arrow-left" aria-hidden="true"></span></a>{% endblock %}
 {% block hero_actions %}{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="/static/css/contact-check.css" />
@@ -63,7 +63,15 @@
     <p class="muted-text" data-result-empty="{{ category }}">暂无结果</p>
     <nav class="list-pagination contact-check-pagination" aria-label="{{ title }}分页" data-pagination="{{ category }}" hidden>
       <div class="list-pagination-summary"><span data-page-summary="{{ category }}"></span><label>每页 <select data-page-size="{{ category }}" aria-label="{{ title }}每页条数"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select> 位</label></div>
-      <div class="list-pagination-actions"><button class="btn btn-secondary btn-icon" type="button" data-page-prev="{{ category }}" title="上一页" aria-label="上一页"><span class="i i-chevron-left" aria-hidden="true"></span></button><span data-page-label="{{ category }}"></span><button class="btn btn-secondary btn-icon" type="button" data-page-next="{{ category }}" title="下一页" aria-label="下一页"><span class="i i-chevron-right" aria-hidden="true"></span></button></div>
+      <div class="list-pagination-actions">
+        <button class="btn btn-secondary" type="button" data-page-prev="{{ category }}" disabled><span class="i i-chevron-left" aria-hidden="true"></span><span>上一页</span></button>
+        <span data-page-label="{{ category }}"></span>
+        <button class="btn btn-secondary" type="button" data-page-next="{{ category }}" disabled><span>下一页</span><span class="i i-chevron-right" aria-hidden="true"></span></button>
+        <form class="list-pagination-jump contact-check-page-jump" data-page-jump="{{ category }}">
+          <label>到第 <input type="number" min="1" max="1" step="1" value="1" required inputmode="numeric" data-page-number="{{ category }}" aria-label="{{ title }}页码" /> 页</label>
+          <button class="btn btn-secondary" type="submit">跳转</button>
+        </form>
+      </div>
     </nav>
   </section>
   {% endfor %}

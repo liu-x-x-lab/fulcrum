@@ -118,6 +118,25 @@ def test_single_bank_page_and_modal_validation_errors(pages):
     assert "共 1 道题" in client.get(BASE).text
 
 
+def test_bank_pagination_preserves_filters_and_supports_page_jump(pages):
+    client, ids = pages
+    _login(client, "readonly")
+    with ids["factory"]() as db:
+        db.add_all(GuessImageQuestion(
+            tenant_id=ids["alpha"], question_id=f"paging-{number}", asset_id="a" * 64,
+            answer=f"分页题目 {number}", category="水果", status="draft",
+        ) for number in range(121))
+        db.commit()
+    response = client.get(BASE, params={"q": "分页", "category": "水果", "status": "draft", "page": 5})
+    assert response.status_code == 200
+    pager = response.text.split('aria-label="题库分页"', 1)[1].split("</nav>", 1)[0]
+    assert "第 5 / 6 页" in pager
+    assert "page=4" in pager and "page=6" in pager
+    for key, value in (("q", "分页"), ("category", "水果"), ("status", "draft")):
+        assert f'name="{key}" value="{value}"' in pager
+    assert 'name="page"' in pager and 'max="6"' in pager and "跳转" in pager
+
+
 def test_zip_preview_confirmation_export_and_audit(pages):
     """导入预览/确认与检查都在弹窗消费 JSON，ZIP 导出继续返回真实文件。"""
     client, ids = pages

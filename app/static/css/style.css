@@ -1671,7 +1671,7 @@ code {
   box-shadow: 0 0 0 3px rgba(99, 102, 241, .14);
 }
 
-/* 卡片高度由真实内容决定，脚本按每层最高卡片留出连线间距，长昵称和成员 ID 可完整换行。 */
+/* 图谱卡片保留身份摘要，完整昵称和成员 ID 由详情承载；布局仍按实际高度留出连线。 */
 .invitation-member {
   display: block;
   width: 100%;
@@ -1680,7 +1680,7 @@ code {
   color: var(--text);
   background: transparent;
   border: 0;
-  border-radius: 14px 14px 0 0;
+  border-radius: 14px;
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -1747,7 +1747,48 @@ code {
 }
 
 .invitation-count {
-  color: var(--text-soft);
+  min-height: 44px;
+  padding: 0;
+  color: var(--primary-strong);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.invitation-count:hover {
+  text-decoration: underline;
+}
+
+.invitation-group-summary {
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.invitation-group-summary strong,
+.invitation-group-action {
+  display: block;
+}
+
+.invitation-group-action {
+  margin-top: 12px;
+  color: var(--primary-strong);
+  font-size: 12px;
+}
+
+.invitation-group-avatars {
+  display: flex;
+  margin-bottom: 10px;
+  padding-left: 6px;
+}
+
+.invitation-group-avatars .identity-avatar {
+  width: 30px;
+  height: 30px;
+  margin-left: -6px;
+  border: 2px solid var(--surface);
   font-size: 12px;
 }
 
@@ -1866,6 +1907,129 @@ code {
   padding: 14px;
   background: var(--surface-soft);
   border-radius: 12px;
+}
+
+.invitation-focus-bar,
+.invitation-member-browser-tools,
+.invitation-member-pagination,
+.invitation-inspector-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.invitation-focus-bar {
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  color: var(--primary-strong);
+  background: var(--surface-soft);
+  border-radius: 12px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.invitation-focus-bar > span {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.invitation-member-browser {
+  min-width: 0;
+  margin-top: 12px;
+  padding: 14px;
+  background: var(--surface-soft);
+  border-radius: 12px;
+}
+
+.invitation-member-browser h4 {
+  margin: 0;
+}
+
+.invitation-member-browser-tools {
+  justify-content: space-between;
+  margin: 16px 0 12px;
+  font-size: 12px;
+}
+
+.invitation-member-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr));
+  gap: 10px;
+  max-height: min(500px, 60dvh);
+  margin: 0;
+  padding: 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+}
+
+.invitation-member-grid > li {
+  min-width: 0;
+}
+
+.invitation-member-grid button {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.invitation-member-grid button:hover,
+.invitation-member-grid button[aria-pressed="true"] {
+  border-color: var(--primary);
+}
+
+.invitation-member-grid small,
+.invitation-member-grid .muted-text {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.invitation-member-grid .identity-cell,
+.invitation-member-grid .identity-text {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.invitation-member-grid .identity-cell {
+  align-items: flex-start;
+}
+
+.invitation-member-grid .identity-name,
+.invitation-member-grid small {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* 极长昵称只占两行，避免一个成员撑高整排；点击后仍可查看完整文字。 */
+.invitation-member .identity-name,
+.invitation-member-grid .identity-name {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.invitation-member-pagination {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.invitation-inspector-actions {
+  margin-top: 16px;
 }
 
 .invitation-inspector-head {
@@ -2918,6 +3082,7 @@ code {
 
 .list-pagination {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -2933,7 +3098,46 @@ code {
 
 .list-pagination-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+
+.list-pagination-jump,
+.list-pagination-jump label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.list-pagination-jump label {
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.list-pagination-jump input[type="number"] {
+  width: 72px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px;
+  color: var(--text);
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.list-pagination-jump input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .list-pagination-jump input[type="number"] {
+    min-height: 44px;
+    font-size: 16px;
+  }
 }
 
 .message-preview,

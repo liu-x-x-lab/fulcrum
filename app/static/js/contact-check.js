@@ -14,7 +14,7 @@
   let queue = null, cursor = 0, total = 0, pending = null;
   let busy = '', stopRequested = false, leaving = false, wakeInterval = null;
   let elapsed = 0, activeSince = null, samples = [], actionQueue = null, remarkItems = [];
-  let runId = null, generation = null, stateReady = false, stateRequest = 0, restoreOnResume = false;
+  let runId = null, generation = null, stateChannel = null, stateReady = false, stateRequest = 0, restoreOnResume = false;
   const editable = root.dataset.canEdit === 'true';
   const base = () => `/contacts/check/${encodeURIComponent(channel.value)}`;
   const query = (key, category) => root.querySelector(`[data-${key}="${category}"]`);
@@ -172,7 +172,7 @@
   function renderCategory(category, renderRows = true) {
     const table = tables[category], length = table.rows.length;
     const pages = Math.max(1, Math.ceil(length / table.size));
-    table.page = Math.min(table.page, pages);
+    table.page = Math.max(1, Math.min(table.page, pages));
     const rows = table.rows.slice((table.page - 1) * table.size, table.page * table.size);
     const fragment = document.createDocumentFragment();
     if (renderRows) rows.forEach((item) => {
@@ -226,6 +226,9 @@
     query('page-label', category).textContent = `${table.page} / ${pages}`;
     query('page-prev', category).disabled = table.page <= 1;
     query('page-next', category).disabled = table.page >= pages;
+    const pageNumber = query('page-number', category);
+    pageNumber.max = String(pages);
+    if (document.activeElement !== pageNumber) pageNumber.value = String(table.page);
     renderControls();
   }
 
@@ -266,7 +269,9 @@
       && !categories.some((key) => rows[key].some((item) => item.contact.id === savedPending.contact_id))) {
       throw new Error('待处理操作缺少对应的保存结果，请重新读取。');
     }
-    runId = saved.run_id; generation = saved.generation;
+    // 同一检测重新读取、继续或暂停时保留翻页位置；账号或检测代次变化才回到首页。
+    const sameRun = stateChannel === channel.value && runId === saved.run_id && generation === saved.generation;
+    runId = saved.run_id; generation = saved.generation; stateChannel = channel.value;
     queue = saved.contacts; cursor = saved.cursor; total = saved.total;
     elapsed = Math.max(0, Number(saved.elapsed_ms) || 0); activeSince = null; samples = [];
     interval.value = String(saved.interval_seconds ?? 1);
@@ -275,7 +280,8 @@
     categories.forEach((key) => {
       const table = tables[key];
       table.rows = rows[key]; table.lookup = new Map(rows[key].map((item) => [String(item.contact.id), item]));
-      table.page = 1; table.selected.clear();
+      if (!sameRun) table.page = 1;
+      table.selected.clear();
     });
     if (savedPending && savedPending.action !== 'scan') {
       const item = categories.map((key) => tables[key].lookup.get(String(savedPending.contact_id))).find(Boolean);
@@ -510,6 +516,18 @@
       if (field.checked) selected.add(field.value); else selected.delete(field.value);
       renderControls();
     }
+  });
+  root.addEventListener('submit', (event) => {
+    const form = event.target.closest('[data-page-jump]');
+    if (!form) return;
+    event.preventDefault();
+    const key = form.dataset.pageJump, field = query('page-number', key);
+    const page = Number(field.value);
+    if (!field.checkValidity() || !Number.isInteger(page) || page < 1 || page > Number(field.max)) {
+      field.reportValidity(); return;
+    }
+    tables[key].page = page;
+    renderCategory(key);
   });
   start.addEventListener('click', () => void runScan());
   restart.addEventListener('click', async () => {

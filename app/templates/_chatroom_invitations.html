@@ -3,29 +3,31 @@
 {% macro invitation_card(node) %}
 <li class="invitation-graph-node" data-invitation-node="{{ node.key }}" data-parent="{{ node.parent_key }}" data-connected="{{ 'true' if node.connected else 'false' }}"
     data-name="{{ node.name }}" data-external-id="{{ node.external_id }}" data-direct-invites="{{ node.direct_invites }}"
-    data-inviter="{{ node.inviter.name|default('未知') }}" data-source="{{ node.inviter.source_label|default('未知') }}"
+    data-inviter="{{ node.inviter.name|default('未知') }}" data-inviter-id="{{ node.inviter.external_id|default('') }}" data-source="{{ node.inviter.source_label|default('未知') }}"
     data-recorded-at="{{ node.inviter.recorded_at|bj_time if node.inviter.recorded_at else '暂无记录' }}"
     data-fetched-at="{{ node.inviter.fetched_at|bj_time if node.inviter.fetched_at else (node.inviter.recorded_at|bj_time if node.inviter.recorded_at else '未知') }}"
     data-joined-at="{{ node.inviter.joined_at|bj_time if node.inviter.joined_at else '未知' }}"
     data-time-label="{{ node.inviter.time_label|default('证据记录时间') }}" data-description="{{ node.inviter.description|default('') }}"
     data-role="{{ '身份未知' if node.placeholder else ('群主' if node.role == 'owner' else ('管理员' if node.role == 'admin' else '普通成员')) }}"
     data-status="{{ '暂无成员资料' if node.placeholder else ('已退群' if node.status == 'left' else '在群') }}">
-  <button type="button" class="invitation-member" data-invitation-select aria-pressed="false" aria-label="查看 {{ node.name }} 的邀请关系详情">
-    {{ identity({'name': node.name, 'external_id': node.external_id, 'avatar_url': node.avatar_url, 'initial': (node.name or '?')[:1], 'show_id': node.name != node.external_id}, 'sm') }}
-    <span class="invitation-member-note">
-      {% if node.placeholder %}暂无该邀请人的成员资料{% elif node.inviter.known %}{{ node.inviter.source_label }}{% else %}邀请人未知{% endif %}
-      {% if node.cycle %} · 关系存在循环{% endif %}
-    </span>
+  <button type="button" class="invitation-member" data-invitation-select aria-pressed="false" aria-label="查看 {{ node.name }} 的邀请关系详情" title="{{ node.name }}（{{ node.external_id }}）">
+    {{ identity({'name': node.name, 'external_id': node.external_id, 'avatar_url': node.avatar_url, 'initial': (node.name or '?')[:1]}, 'sm', false) }}
+    {% if node.placeholder or not node.inviter.known or node.cycle %}
+    <span class="invitation-member-note">{% if node.placeholder %}暂无该邀请人的成员资料{% elif not node.inviter.known %}邀请人未知{% endif %}{% if node.cycle %} · 关系存在循环{% endif %}</span>
+    {% endif %}
+    {% if node.role in ('owner', 'admin') or node.status == 'left' %}
     <span class="invitation-member-tags">
       {% if node.role in ('owner', 'admin') %}<span class="chip chip-outline">{{ '群主' if node.role == 'owner' else '管理员' }}</span>{% endif %}
       {% if node.status == 'left' %}<span class="chip chip-muted">已退群</span>{% endif %}
-      {% if node.inviter.known %}<span class="invitation-member-inviter">邀请人：{{ node.inviter.name }}</span>{% endif %}
     </span>
+    {% endif %}
   </button>
+  {% if node.direct_invites or node.child_count %}
   <div class="invitation-member-footer">
-    <span class="invitation-count">直接邀请 {{ node.direct_invites }} 人</span>
+    <button type="button" class="invitation-count" data-invitation-members="{{ node.key }}" aria-label="查看 {{ node.name }} 直接邀请的 {{ node.direct_invites }} 位成员">直接邀请 {{ node.direct_invites }} 人</button>
     {% if node.child_count %}<button type="button" class="invitation-branch" data-invitation-toggle aria-expanded="true" aria-label="收起 {{ node.name }} 的邀请成员"><span class="i i-chevron-right" aria-hidden="true"></span><span data-invitation-branch-label>收起</span></button>{% endif %}
   </div>
+  {% endif %}
 </li>
 {% endmacro %}
 {% set graph_nodes = detail.invitations.nodes|selectattr('connected')|list %}
@@ -74,13 +76,17 @@
           <button type="button" class="btn btn-secondary btn-icon" data-invitation-zoom-out title="缩小" aria-label="缩小" disabled>−</button>
           <output class="invitation-scale" data-invitation-scale aria-label="图谱缩放比例">100%</output>
           <button type="button" class="btn btn-secondary btn-icon" data-invitation-zoom-in title="放大" aria-label="放大" disabled>+</button>
-          <button type="button" class="btn btn-secondary btn-small" data-invitation-fit disabled>适应画布</button>
-          <button type="button" class="btn btn-secondary btn-small" data-invitation-expand disabled>展开全部</button>
+          <button type="button" class="btn btn-secondary btn-small" data-invitation-fit title="恢复可阅读的大小并居中" disabled>重置视图</button>
+          <button type="button" class="btn btn-secondary btn-small" data-invitation-expand title="展开邀请链，人数较多的分支仍汇总展示" disabled>展开关系</button>
           <button type="button" class="btn btn-secondary btn-small" data-invitation-collapse disabled>收起分支</button>
           <button type="button" class="btn btn-secondary btn-small" data-invitation-fullscreen disabled>放大查看</button>
         </div>
       </div>
       <p class="invitation-search-status muted-text" data-invitation-search-status role="status" aria-live="polite"></p>
+      <div class="invitation-focus-bar" data-invitation-focus-bar hidden>
+        <span data-invitation-focus-label></span>
+        <button type="button" class="btn btn-secondary btn-small" data-invitation-overview>返回全群</button>
+      </div>
       <div class="invitation-viewport{% if not graph_nodes %} is-empty{% endif %}" data-invitation-viewport role="region" aria-label="邀请关系图谱画布" aria-describedby="invitation-graph-help" tabindex="0">
         {% if graph_nodes %}
         <div class="invitation-graph-scene" data-invitation-scene>
@@ -94,11 +100,31 @@
         <div class="invitation-empty"><span class="i i-users" aria-hidden="true"></span><strong>{{ '暂未记录到邀请关系' if detail.invitations.total else '暂无成员信息' }}</strong><p>{{ '已同步的成员可在下方查看；收到明确的邀请记录后，会自动显示关系连线。' if detail.invitations.total else '请先同步群资料，获取成员信息。' }}</p></div>
         {% endif %}
       </div>
-      <div class="invitation-caption" id="invitation-graph-help"><span>邀请人 <span aria-hidden="true">→</span> 被邀请人</span><span>{% if graph_nodes %}拖动画布查看 · 滚轮或 + / − 缩放 · 0 适应画布{% else %}仅展示有明确记录的邀请关系{% endif %}</span></div>
+      <div class="invitation-caption" id="invitation-graph-help"><span>邀请人 <span aria-hidden="true">→</span> 被邀请人</span><span>{% if graph_nodes %}大分支自动汇总 · 点击人数查看成员 · 拖动 / 滚轮缩放 · 0 重置{% else %}仅展示有明确记录的邀请关系{% endif %}</span></div>
+      <section class="invitation-member-browser" data-invitation-member-browser aria-labelledby="invitation-member-browser-title" hidden>
+        <div class="invitation-inspector-head">
+          <div><h4 id="invitation-member-browser-title" data-invitation-member-title></h4><p class="muted-text" data-invitation-member-subtitle></p></div>
+          <button type="button" class="btn btn-ghost btn-icon" data-invitation-member-close aria-label="关闭成员列表"><span class="i i-x" aria-hidden="true"></span></button>
+        </div>
+        <div class="invitation-member-browser-tools">
+          <label class="invitation-search">筛选直属成员<input type="search" placeholder="姓名或成员 ID" autocomplete="off" data-invitation-member-filter /></label>
+          <span class="muted-text" data-invitation-member-page role="status" aria-live="polite"></span>
+        </div>
+        <ul class="invitation-member-grid" data-invitation-member-grid aria-label="直接邀请的成员"></ul>
+        <p class="muted-text" data-invitation-member-empty hidden>没有匹配的直属成员，请更换姓名或成员 ID。</p>
+        <div class="invitation-member-pagination">
+          <button type="button" class="btn btn-secondary btn-small" data-invitation-member-prev>上一页</button>
+          <button type="button" class="btn btn-secondary btn-small" data-invitation-member-next>下一页</button>
+        </div>
+      </section>
       <aside class="invitation-inspector" data-invitation-inspector aria-label="选中成员的邀请关系详情" hidden>
         <div class="invitation-inspector-head"><div><h4 data-invitation-detail-name>成员详情</h4><p class="muted-text" data-invitation-detail-id></p><p class="muted-text" data-invitation-detail-status></p></div><button type="button" class="btn btn-ghost btn-icon" data-invitation-clear-selection aria-label="关闭成员详情"><span class="i i-x" aria-hidden="true"></span></button></div>
         <dl class="invitation-inspector-facts"><div><dt>邀请人</dt><dd data-invitation-detail-inviter></dd></div><div><dt>关系来源</dt><dd data-invitation-detail-source></dd></div><div><dt>入群时间</dt><dd data-invitation-detail-joined></dd></div><div><dt data-invitation-detail-time-label>资料获取时间</dt><dd data-invitation-detail-time></dd></div><div><dt>直接邀请</dt><dd data-invitation-detail-count></dd></div><div class="invitation-inspector-description"><dt>入群说明</dt><dd data-invitation-detail-description></dd></div></dl>
         <p class="muted-text invitation-time-hint">入群时间仅展示渠道明确返回的时间，资料获取时间不代表入群时间。</p>
+        <div class="invitation-inspector-actions">
+          <button type="button" class="btn btn-primary btn-small" data-invitation-focus>只看此人关系</button>
+          <button type="button" class="btn btn-secondary btn-small" data-invitation-detail-members>查看直属成员</button>
+        </div>
       </aside>
       {% if unlinked_nodes %}
       <details class="invitation-unlinked disclosure" data-invitation-unlinked>
