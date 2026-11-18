@@ -130,3 +130,17 @@ def test_bundled_idiom_guess_is_picked_up_without_any_scheduler_code() -> None:
         assert (item.action, item.kind, item.time_key, item.enabled_key) == ("idiom_daily_start", "daily", "send_time", "scheduled_enabled")
     finally:
         plugin_directory._SCAN_CACHE.clear()
+
+
+def test_bundled_daily_news_uses_the_declared_schedule() -> None:
+    from pathlib import Path
+
+    plugin_directory._SCAN_CACHE.clear()
+    settings.plugins_dir = str(Path(__file__).resolve().parents[1] / "plugins")
+    try:
+        assert "daily_news" in scheduler._declared_schedule_codes()
+        assert "daily_news" not in scheduler.LEGACY_SCHEDULED_PLUGIN_CODES
+        (item,) = scheduler._declared_schedules("daily_news")
+        assert (item.action, item.kind, item.time_key, item.enabled_key) == ("baidu_news_daily_push", "daily", "push_time", "")
+    finally:
+        plugin_directory._SCAN_CACHE.clear()

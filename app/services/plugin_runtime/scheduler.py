@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.tenant_context import require_tenant_id
 from app.core.time import ensure_shanghai_datetime, now_shanghai
-from app.models.entities import BotPlugin, Conversation, Plugin, TaskJob, WeatherSubscription
+from app.models.entities import BotPlugin, Chatroom, Conversation, GroupPluginScope, Plugin, TaskJob, WeatherSubscription
 from app.services.plugin_governance import blocked_plugin_codes
 from app.services.plugin_runtime.contracts import PluginExecutionContext
 from app.services.plugin_runtime.service import execute_binding_scheduled_action
@@ -183,6 +183,19 @@ def schedule_due_plugin_actions(db: Session, *, now: datetime | None = None) -> 
             )
             if created:
                 created_jobs.append(job)
+        for spec in _group_schedule_contexts(db, binding, config, current):
+            job, created = enqueue_plugin_scheduled_action(
+                db,
+                binding,
+                action_key=spec.action_key,
+                scheduled_for=spec.scheduled_for,
+                parameters=spec.parameters,
+                conversation_id=spec.conversation_id,
+                high_side_effect=spec.high_side_effect,
+                priority=spec.priority,
+            )
+            if created:
+                created_jobs.append(job)
     return created_jobs
 
 
@@ -303,7 +316,7 @@ def normalize_action_key(action_key: str) -> str:
 
 # 还在下面 _build_plugin_schedule_specs 里按编码硬编码的老插件;新插件一律在清单里声明 [[schedule]]。
 LEGACY_SCHEDULED_PLUGIN_CODES = frozenset(
-    {"daily_news", "daily_ranking", "dota2_stats", "douyu", "epic_free", "game_task", "member_context", "message_summary", "value_rank", "weather"}
+    {"daily_ranking", "dota2_stats", "douyu", "epic_free", "game_task", "member_context", "message_summary", "value_rank", "weather"}
 )
 
 
@@ -320,7 +333,13 @@ def _declared_schedule_codes() -> set[str]:
     return {item.manifest.code for item in discover_plugins() if item.is_valid and item.schedules}
 
 
-def _build_declared_schedule_specs(schedules: tuple, config: Mapping[str, Any], current: datetime) -> tuple[PluginScheduledActionSpec, ...]:
+def _build_declared_schedule_specs(
+    schedules: tuple,
+    config: Mapping[str, Any],
+    current: datetime,
+    *,
+    conversation_id: int | None = None,
+) -> tuple[PluginScheduledActionSpec, ...]:
     """按清单声明生成定时计划:daily 每天一次且只在到点后的窗口内触发(错过不补发),interval 按时间桶;幂等键由时间决定,不会重复入队。"""
 
     specs: list[PluginScheduledActionSpec] = []
@@ -341,11 +360,80 @@ def _build_declared_schedule_specs(schedules: tuple, config: Mapping[str, Any], 
                 action_key=item.action,
                 scheduled_for=scheduled_for,
                 parameters={},
+                conversation_id=conversation_id,
                 high_side_effect=item.high_side_effect,
                 priority=item.priority,
             )
         )
     return tuple(specs)
+
+
+def _group_schedule_contexts(
+    db: Session,
+    binding: BotPlugin,
+    base_config: Mapping[str, Any],
+    current: datetime,
+) -> list[PluginScheduledActionSpec]:
+    """把群级定时配置覆盖折算成按会话独立的入队计划。
+
+    绑定级配置仍然生成原来的全局计划；群详情里显式改过定时开关或时间的群
+    另外按自己的有效配置和会话入队，避免群设置保存后调度器完全看不到。
+    只有声明式 [[schedule]] 插件参与；插件必须在全局任务里自行跳过这些群。
+    """
+
+    from app.services.plugin_schemas import deep_merge_config
+
+    plugin_code = str(binding.plugin.code if binding.plugin else "").strip()
+    schedules = _declared_schedules(plugin_code)
+    schedule_keys = {key for item in schedules for key in (item.enabled_key, item.time_key) if key}
+    if not schedule_keys:
+        return []
+    scopes = db.scalars(
+        select(GroupPluginScope).where(
+            GroupPluginScope.bot_plugin_id == int(binding.id),
+            GroupPluginScope.tenant_id == int(binding.tenant_id),
+            GroupPluginScope.enabled.is_(True),
+            GroupPluginScope.config_override_json.isnot(None),
+        )
+    ).all()
+    result: list[PluginScheduledActionSpec] = []
+    seen: set[tuple[str, datetime, int | None]] = set()
+    for scope in scopes:
+        override = _parse_json_object(scope.config_override_json)
+        if not any(key in override for key in schedule_keys):
+            continue
+        room = db.get(Chatroom, int(scope.chatroom_id))
+        if (
+            room is None
+            or int(room.tenant_id) != int(binding.tenant_id)
+            or int(room.bot_id) != int(binding.bot_id)
+            or int(room.channel_id) != int(scope.channel_id)
+            or not room.is_active
+            or room.management_status != "enabled"
+        ):
+            continue
+        conversation = db.scalar(
+            select(Conversation).where(
+                Conversation.tenant_id == binding.tenant_id,
+                Conversation.bot_id == binding.bot_id,
+                Conversation.channel_id == room.channel_id,
+                Conversation.external_id == room.external_id,
+                Conversation.chat_type == "group",
+            ).order_by(Conversation.id)
+        )
+        if conversation is None:
+            continue
+        effective_config = deep_merge_config(base_config, override)
+        specs = _build_declared_schedule_specs(
+            schedules, effective_config, current, conversation_id=int(conversation.id)
+        )
+        for spec in specs:
+            key = (spec.action_key, spec.scheduled_for, spec.conversation_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(spec)
+    return result
 
 
 def _build_plugin_schedule_specs(
@@ -355,23 +443,6 @@ def _build_plugin_schedule_specs(
 ) -> tuple[PluginScheduledActionSpec, ...]:
     """把定时插件收敛为统一动作计划，所有任务都只携带非敏感定位参数。"""
 
-    if plugin_code == "daily_news":
-        today = current.strftime("%Y-%m-%d")
-        if str(config.get("last_push_date") or "").strip() == today:
-            return ()
-        hour, minute = _parse_clock_time(str(config.get("push_time") or "08:30"))
-        scheduled_for = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if current < scheduled_for:
-            return ()
-        return (
-            PluginScheduledActionSpec(
-                action_key="baidu_news_daily_push",
-                scheduled_for=scheduled_for,
-                parameters={},
-                high_side_effect=True,
-                priority=70,
-            ),
-        )
     if plugin_code == "douyu":
         if not _mapping_has_values(config.get("room_subscriptions")) and not _mapping_has_values(
             config.get("yuba_subscriptions")

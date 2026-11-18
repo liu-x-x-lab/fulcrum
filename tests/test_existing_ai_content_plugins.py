@@ -26,7 +26,7 @@ from app.core.db import Base
 from app.core.tenant_context import tenant_scope
 from app.core.tenant_db import platform_session, tenant_session
 from app.core.time import SHANGHAI_TZ
-from app.models.entities import Bot, BotPlugin, Channel, Conversation, Plugin, PluginStateRecord, TaskJob
+from app.models.entities import Bot, BotPlugin, Channel, Chatroom, Conversation, GroupPluginScope, Plugin, PluginStateRecord, TaskJob
 from app.models.saas import Tenant
 from app.services.plugin_directory import (
     _extract_command_args,
@@ -1043,6 +1043,247 @@ def test_daily_news_scheduled_action_queues_text_and_image_for_groups_only(daily
         assert binding is not None
         assert json.loads(binding.config_json or "{}")["last_push_date"]
         assert identity["direct_conversation_id"] not in {item["conversation_id"] for item in payloads}
+
+
+def test_daily_news_group_schedule_uses_group_state_and_single_target(daily_news_fixture) -> None:
+    """单群定时推送不受绑定级 last_push_date 影响，且只发给该群一天一次。"""
+
+    from app.core.time import now_shanghai
+
+    factory, identity = daily_news_fixture
+    loaded = load_directory_plugin("daily_news", force=True)
+    assert loaded is not None and loaded.instance is not None
+    module = loaded.instance._module
+    image_base64 = base64.b64encode(b"group-daily-image").decode("ascii")
+    today = now_shanghai().strftime("%Y-%m-%d")
+
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        binding = db.get(BotPlugin, identity["binding_id"])
+        assert binding is not None
+        binding.config_json = json.dumps({"push_time": "08:30", "last_push_date": today})
+        group = db.get(Conversation, identity["group_conversation_id"])
+        assert group is not None
+        room = Chatroom(
+            tenant_id=identity["tenant_id"],
+            bot_id=identity["bot_id"],
+            channel_id=group.channel_id,
+            external_id=group.external_id,
+            name="日报群",
+            status="active",
+            management_status="enabled",
+            is_active=True,
+        )
+        db.add(room)
+        db.flush()
+        db.add(GroupPluginScope(
+            tenant_id=identity["tenant_id"],
+            channel_id=room.channel_id,
+            chatroom_id=room.id,
+            bot_plugin_id=binding.id,
+            scope_status="overridden",
+            enabled=True,
+            action_scope="all",
+            config_override_json=json.dumps({"push_time": "17:35"}),
+        ))
+
+        def request() -> PluginExecutionRequest:
+            return PluginExecutionRequest(
+                action="baidu_news_daily_push",
+                config={"push_time": "17:35", "last_push_date": today},
+                payload={},
+                context=PluginExecutionContext(
+                    tenant_id=identity["tenant_id"],
+                    binding_id=identity["binding_id"],
+                    bot_id=identity["bot_id"],
+                    channel_id=group.channel_id,
+                    conversation_id=group.id,
+                    chat_type="group",
+                ),
+            )
+
+        with patch.object(
+            module,
+            "_build_daily_digest",
+            return_value={"text": "群内今日热榜", "image_base64": image_base64},
+        ) as digest:
+            first = module.execute_scheduled_action(db, request())
+            second = module.execute_scheduled_action(db, request())
+        db.commit()
+
+        assert first.ok is True and first.status == "completed"
+        assert second.ok is True and second.status == "skipped"
+        assert digest.call_count == 1
+        jobs = db.scalars(select(TaskJob).order_by(TaskJob.id.asc())).all()
+        assert len(jobs) == 2
+        assert {json.loads(job.payload_json)["conversation_id"] for job in jobs} == {
+            identity["group_conversation_id"]
+        }
+        assert json.loads(binding.config_json or "{}")["last_push_date"] == today
+        state = db.scalars(
+            select(PluginStateRecord).where(PluginStateRecord.bot_plugin_id == binding.id)
+        ).all()
+        assert len(state) == 1
+        assert json.loads(state[0].payload_json)["last_push_date"] == today
+
+
+@pytest.mark.parametrize("first_run", ["global", "targeted"])
+def test_daily_news_global_and_group_runs_do_not_double_push(daily_news_fixture, first_run) -> None:
+    """全局任务和群级任务共享群状态；先跑哪条路径都不会在同一天重复推送。"""
+
+    from app.core.time import now_shanghai
+
+    factory, identity = daily_news_fixture
+    loaded = load_directory_plugin("daily_news", force=True)
+    assert loaded is not None and loaded.instance is not None
+    module = loaded.instance._module
+    image_base64 = base64.b64encode(b"shared-state-image").decode("ascii")
+    today = now_shanghai().strftime("%Y-%m-%d")
+
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        binding = db.get(BotPlugin, identity["binding_id"])
+        group = db.get(Conversation, identity["group_conversation_id"])
+        assert binding is not None and group is not None
+
+        def request(conversation_id: int | None) -> PluginExecutionRequest:
+            return PluginExecutionRequest(
+                action="baidu_news_daily_push",
+                config={"push_time": "08:30", "last_push_date": ""},
+                payload={},
+                context=PluginExecutionContext(
+                    tenant_id=identity["tenant_id"],
+                    binding_id=identity["binding_id"],
+                    bot_id=identity["bot_id"],
+                    channel_id=group.channel_id if conversation_id else None,
+                    conversation_id=conversation_id,
+                    chat_type="group" if conversation_id else None,
+                ),
+            )
+
+        with patch.object(
+            module,
+            "_build_daily_digest",
+            return_value={"text": "共享状态热榜", "image_base64": image_base64},
+        ) as digest:
+            if first_run == "global":
+                first = module.execute_scheduled_action(db, request(None))
+                second = module.execute_scheduled_action(db, request(int(group.id)))
+            else:
+                first = module.execute_scheduled_action(db, request(int(group.id)))
+                second = module.execute_scheduled_action(db, request(None))
+        db.commit()
+
+        assert first.ok is True and first.status == "completed"
+        assert second.ok is True and second.status == "skipped"
+        assert second.output["reason"] == "already_pushed"
+        assert digest.call_count == 1
+        jobs = db.scalars(select(TaskJob).order_by(TaskJob.id.asc())).all()
+        assert len(jobs) == 2
+        assert {json.loads(job.payload_json)["conversation_id"] for job in jobs} == {
+            identity["group_conversation_id"]
+        }
+        assert json.loads(binding.config_json or "{}")["last_push_date"] == (
+            today if first_run == "global" else ""
+        )
+
+
+def test_daily_news_global_push_skips_groups_with_group_schedule(daily_news_fixture) -> None:
+    """群详情改过推送时间的群由会话级任务负责，全局任务不再重复抓取和推送。"""
+
+    factory, identity = daily_news_fixture
+    loaded = load_directory_plugin("daily_news", force=True)
+    assert loaded is not None and loaded.instance is not None
+    module = loaded.instance._module
+
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        binding = db.get(BotPlugin, identity["binding_id"])
+        group = db.get(Conversation, identity["group_conversation_id"])
+        assert binding is not None and group is not None
+        room = Chatroom(
+            tenant_id=identity["tenant_id"],
+            bot_id=identity["bot_id"],
+            channel_id=group.channel_id,
+            external_id=group.external_id,
+            name="自定义时间群",
+            status="active",
+            management_status="enabled",
+            is_active=True,
+        )
+        db.add(room)
+        db.flush()
+        db.add(GroupPluginScope(
+            tenant_id=identity["tenant_id"],
+            channel_id=room.channel_id,
+            chatroom_id=room.id,
+            bot_plugin_id=binding.id,
+            scope_status="overridden",
+            enabled=True,
+            action_scope="all",
+            config_override_json=json.dumps({"push_time": "17:35"}),
+        ))
+        db.flush()
+        request = PluginExecutionRequest(
+            action="baidu_news_daily_push",
+            config={"push_time": "08:30", "last_push_date": ""},
+            payload={},
+            context=PluginExecutionContext(
+                tenant_id=identity["tenant_id"],
+                binding_id=identity["binding_id"],
+                bot_id=identity["bot_id"],
+            ),
+        )
+        with patch.object(module, "_build_daily_digest") as digest:
+            result = module.execute_scheduled_action(db, request)
+
+        assert result.ok is True and result.status == "skipped"
+        assert result.output["reason"] == "group_schedule_overrides"
+        assert digest.call_count == 0
+        assert db.scalars(select(TaskJob)).all() == []
+
+
+def test_daily_news_failed_push_does_not_mark_group_as_pushed(daily_news_fixture) -> None:
+    """入队失败时不能写群级已推日期，避免当天后续补跑被错误跳过。"""
+
+    factory, identity = daily_news_fixture
+    loaded = load_directory_plugin("daily_news", force=True)
+    assert loaded is not None and loaded.instance is not None
+    module = loaded.instance._module
+
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        binding = db.get(BotPlugin, identity["binding_id"])
+        group = db.get(Conversation, identity["group_conversation_id"])
+        assert binding is not None and group is not None
+        request = PluginExecutionRequest(
+            action="baidu_news_daily_push",
+            config={"push_time": "08:30", "last_push_date": ""},
+            payload={},
+            context=PluginExecutionContext(
+                tenant_id=identity["tenant_id"],
+                binding_id=identity["binding_id"],
+                bot_id=identity["bot_id"],
+                channel_id=group.channel_id,
+                conversation_id=group.id,
+                chat_type="group",
+            ),
+        )
+        failed = {
+            "job_ids": [],
+            "failed_targets": [{"conversation_id": int(group.id), "error": "queue_failed"}],
+            "pushed_conversation_ids": [],
+            "skipped_conversation_ids": [],
+            "pushed_conversation_count": 0,
+            "skipped_conversation_count": 0,
+        }
+        with (
+            patch.object(module, "_build_daily_digest", return_value={"text": "热榜", "image_base64": ""}),
+            patch.object(module, "enqueue_outbound_jobs_by_conversation", return_value=failed),
+        ):
+            result = module.execute_scheduled_action(db, request)
+
+        assert result.ok is False and result.status == "error"
+        assert db.scalars(
+            select(PluginStateRecord).where(PluginStateRecord.bot_plugin_id == binding.id)
+        ).all() == []
+        assert json.loads(binding.config_json or "{}")["last_push_date"] == ""
 
 
 def test_daily_news_baidu_format_keeps_latest_hashtag_output() -> None:

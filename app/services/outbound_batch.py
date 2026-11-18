@@ -103,6 +103,8 @@ def enqueue_outbound_jobs_by_conversation(
 ) -> dict[str, Any]:
     job_ids: list[int] = []
     failed_targets: list[dict[str, Any]] = []
+    pushed_conversation_ids: list[int] = []
+    skipped_conversation_ids: list[int] = []
     pushed_conversation_count = 0
     skipped_conversation_count = 0
 
@@ -117,6 +119,7 @@ def enqueue_outbound_jobs_by_conversation(
             # 群未授权是正常跳过，不能进入异常回滚而撤销其他群已创建的任务。
             if not plugin_group_conversation_enabled(db, channel=channel, conversation=conversation, plugin_code=plugin_code):
                 skipped_conversation_count += 1
+                skipped_conversation_ids.append(int(conversation.id))
                 continue
 
             payloads = payload_builder(conversation, channel)
@@ -133,6 +136,7 @@ def enqueue_outbound_jobs_by_conversation(
                 )
             )
             pushed_conversation_count += 1
+            pushed_conversation_ids.append(int(conversation.id))
         except Exception as exc:
             failed_target = {
                 "conversation_id": conversation.id,
@@ -154,6 +158,8 @@ def enqueue_outbound_jobs_by_conversation(
     return {
         "job_ids": job_ids,
         "failed_targets": failed_targets,
+        "pushed_conversation_ids": pushed_conversation_ids,
+        "skipped_conversation_ids": skipped_conversation_ids,
         "pushed_conversation_count": pushed_conversation_count,
         "skipped_conversation_count": skipped_conversation_count,
     }

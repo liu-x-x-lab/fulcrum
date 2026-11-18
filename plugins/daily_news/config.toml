@@ -2,7 +2,7 @@
 code = "daily_news"
 display_name = "每日新闻"
 plugin_type = "scheduled"
-version = "1.0.0"
+version = "1.1.0"
 author = "abot"
 description = "每天向已启用群聊推送百度热榜和 60 秒新闻图片"
 default_enabled = false
@@ -22,3 +22,54 @@ news60s_api_url = ""
 default_timeout = 15
 baidu_limit = 30
 push_time = "08:30"
+
+# 定时计划声明:平台调度器每天在 push_time 调用 baidu_news_daily_push。
+# 群详情改过 push_time 的群会额外生成会话级任务，插件在全局任务里跳过这些群。
+[[schedule]]
+action = "baidu_news_daily_push"
+kind = "daily"
+time_key = "push_time"
+default_time = "08:30"
+high_side_effect = true
+priority = 70
+
+[[config.fields]]
+key = "push_time"
+label = "每天推送时间（北京时间）"
+kind = "time"
+default = "08:30"
+hint = "群详情里单独修改后，本群按自己的时间推送，不再跟随机器人默认时间。"
+group = "定时推送"
+
+[[config.fields]]
+key = "baidu_api_url"
+label = "百度热榜接口"
+kind = "url"
+default = "https://top.baidu.com/api/board?platform=wise&tab=realtime"
+group = "内容来源"
+
+[[config.fields]]
+key = "news60s_api_url"
+label = "60 秒新闻接口"
+kind = "url"
+default = ""
+hint = "留空时只发送文字热榜；接口需要自行部署。"
+group = "内容来源"
+
+[[config.fields]]
+key = "default_timeout"
+label = "接口超时（秒）"
+kind = "number"
+default = 15
+min = 5
+max = 60
+group = "内容来源"
+
+[[config.fields]]
+key = "baidu_limit"
+label = "热榜条数"
+kind = "number"
+default = 30
+min = 5
+max = 50
+group = "内容来源"
