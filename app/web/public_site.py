@@ -26,6 +26,7 @@ from app.web.auth_common import (
     TENANT_LOGIN_CAPTCHA_PURPOSE,
     TENANT_LOGIN_ERROR,
     record_auth_event,
+    login_session_expiry,
     request_ip_address,
     request_user_agent,
     set_tenant_auth_cookies,
@@ -92,6 +93,7 @@ def _render_enterprise_login(
     status_code: int = 200,
     mobile: str = "",
     challenge: CaptchaChallenge | None = None,
+    remember_me: bool = False,
 ):
     """渲染企业账号手机号登录页，认证失败时绝不回填密码。"""
 
@@ -102,6 +104,7 @@ def _render_enterprise_login(
         notice=notice,
         notice_tone="danger" if notice else "",
         prefill_mobile=mobile,
+        remember_me=remember_me,
         captcha_token=resolved_challenge.token,
         captcha_image=resolved_challenge.image_data_uri,
         captcha_refresh_url="/auth/captcha?purpose=" + TENANT_LOGIN_CAPTCHA_PURPOSE,
@@ -280,6 +283,7 @@ async def enterprise_login_action(
     request: Request,
     mobile: str = Form(""),
     password: str = Form(""),
+    remember_me: bool = Form(False),
     captcha_token: str = Form(""),
     captcha_answer: str = Form(""),
 ):
@@ -304,6 +308,7 @@ async def enterprise_login_action(
             notice="图形验证码错误或已过期",
             status_code=400,
             mobile=normalized_mobile,
+            remember_me=remember_me,
         )
     if not normalized_mobile or not password:
         record_auth_event(
@@ -318,6 +323,7 @@ async def enterprise_login_action(
             notice=TENANT_LOGIN_ERROR,
             status_code=400,
             mobile=normalized_mobile,
+            remember_me=remember_me,
         )
     with SessionLocal() as db:
         user = authenticate_tenant_account(db, normalized_mobile, password)
@@ -334,10 +340,12 @@ async def enterprise_login_action(
                 notice=TENANT_LOGIN_ERROR,
                 status_code=401,
                 mobile=normalized_mobile,
+                remember_me=remember_me,
             )
         session = create_tenant_session(
             db,
             user,
+            expires_at=login_session_expiry(remember_me),
             ip_address=request_ip_address(request),
             user_agent=request_user_agent(request),
         )

@@ -12,7 +12,7 @@ from app.core.time import ensure_shanghai_datetime, format_shanghai_time, now_sh
 from app.services import message_view
 from app.services.channel_labels import get_channel_type_label
 from app.web.auth_common import TENANT_CSRF_COOKIE, TENANT_LOGOUT_PATH, TENANT_PASSWORD_PATH
-from app.web.shared.urls import build_context_href, build_module_links
+from app.web.shared.urls import build_context_href, build_module_links, current_path_with_query, safe_return_to
 from app.web.tenant_navigation import build_tenant_navigation
 
 
@@ -71,6 +71,8 @@ def render(request: Request, template: str, **context):
         "app_started_at": APP_STARTED_AT,
         "notice_tone": notice_tone,
         "module_links": build_module_links(),
+        "current_list_url": current_path_with_query(request),
+        "return_to": safe_return_to(request.query_params.get("return_to"), ""),
     }
     base_context.update(navigation_context)
     base_context.update(context)

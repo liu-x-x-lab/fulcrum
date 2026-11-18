@@ -719,3 +719,13 @@ def test_webridge_is_at_maps_to_mentioned_self() -> None:
     plain = adapter.normalize_inbound_payload(channel, {"body": {"msg_type": "text", "chat_id": "1@chatroom", "is_group": True, "content": "hi"}})
     assert at_me["details"]["mentioned_self"] is True
     assert plain["details"]["mentioned_self"] is False
+
+
+def test_quote_preserves_reply_and_external_image_id():
+    xml = ("<msg><appmsg><type>57</type><title>lookup</title><refermsg>"
+           "<type>3</type><svrid>9876543210987654321</svrid><content>other</content>"
+           "</refermsg></appmsg></msg>")
+    event = WechatWeBridgeAdapter().normalize_inbound_payload(
+        None, {"body": {"msg_type": "app", "msg_subtype": "quote", "content": xml}})
+    assert event["message"]["content"] == "lookup"
+    assert event["details"]["quote_payload"]["ref_external_id"] == "9876543210987654321"

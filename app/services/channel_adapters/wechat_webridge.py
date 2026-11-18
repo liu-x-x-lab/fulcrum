@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.models.entities import Channel, Conversation
-from app.services.message_view import recall_info
+from app.services.message_view import parse_quote_payload, recall_info
 
 from .base import BaseChannelAdapter
 
@@ -116,6 +116,13 @@ class WechatWeBridgeAdapter(BaseChannelAdapter):
             "group": {key: body.get(key) for key in ("room_id", "member_id", "member_ids", "group_name", "room_name", "room_remark", "operation") if body.get(key) is not None},
             "moment": {key: body.get(key) for key in ("sns_id", "media_id", "author_id", "operation_id") if body.get(key) is not None},
         }
+        if message_type == "quote":
+            quote = parse_quote_payload(content) or parse_quote_payload(body.get("content_xml"))
+            if quote:
+                # 回显核对仍需原 XML；指令匹配只看用户自己写的回复。
+                details["content_xml"] = body.get("content_xml") or content
+                details["quote_payload"] = quote
+                content = quote["title"]
         own_account = _own_account_id(channel, payload)
         if message_type == "pat":
             # 拍一拍:按协议文档 4.3.3 的结构化字段(拍的人 / 被拍的人的 wxid)整理成统一结构,

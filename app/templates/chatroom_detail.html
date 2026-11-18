@@ -1,15 +1,16 @@
 {% extends 'base.html' %}
-{% block back %}<a class="page-back" href="/chatrooms?channel_id={{ channel.id }}" title="返回群管理" aria-label="返回群管理"><span class="i i-arrow-left" aria-hidden="true"></span></a>{% endblock %}
+{% block back %}<a class="page-back" href="{{ back_href }}" title="返回群管理" aria-label="返回群管理"><span class="i i-arrow-left" aria-hidden="true"></span></a>{% endblock %}
 {% from '_identity.html' import identity %}
 {% from '_payment_ledger.html' import payment_ledger %}
 {% from '_config_card.html' import config_card %}
 {# 群详情：群功能 / 插件 / 成员 / 消息 / 资料 五个标签，默认进入群功能；技术字段统一折叠到“技术信息”。 #}
 {% set base_url = '/channels/' ~ channel.id ~ '/chatrooms/' ~ detail.chatroom_id %}
+{% set return_query = '?return_to=' ~ (return_to|urlencode) if return_to else '' %}
 {% block hero_actions %}
 <div class="hero-action-cluster">
   
   {% if detail.sync_action or channel.channel_type == 'wechat_ipad' or channel.channel_type == 'workwechat' %}
-  <form method="post" action="{{ detail.sync_action or (base_url ~ '/sync') }}" data-action-feedback>
+  <form method="post" action="{{ detail.sync_action or (base_url ~ '/sync') }}{{ return_query }}" data-action-feedback>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     {# 普通表单与进度反馈均停留在当前标签，避免从资料页同步后跳回群功能。 #}
     <input type="hidden" name="tab" value="{{ tab }}" />
@@ -36,11 +37,11 @@
 
   {# 页面链接采用当前页语义，手机只滚动导航自身，不把整页撑宽或伪装为脚本式 Tab。 #}
   <nav class="chatroom-tabs" aria-label="群详情导航">
-    <a href="{{ base_url }}?tab=features"{% if tab == 'features' %} class="active" aria-current="page"{% endif %}><span class="i i-sliders" aria-hidden="true"></span><span>群功能</span></a>
-    <a href="{{ base_url }}?tab=plugins"{% if tab == 'plugins' %} class="active" aria-current="page"{% endif %}><span class="i i-puzzle" aria-hidden="true"></span><span>插件</span><span class="chatroom-tab-count" data-group-plugin-count>{{ detail.binding_summary.effective_enabled_count }}/{{ detail.binding_summary.total }}</span></a>
-    <a href="{{ base_url }}?tab=members"{% if tab == 'members' %} class="active" aria-current="page"{% endif %}><span class="i i-users" aria-hidden="true"></span><span>成员</span><span class="chatroom-tab-count">{{ detail.members|length }}</span></a>
-    <a href="{{ detail.message_center_href }}" title="在消息中心查看这个群的消息"><span class="i i-message" aria-hidden="true"></span><span>消息</span><span class="i i-external" aria-hidden="true"></span></a>
-    <a href="{{ base_url }}?tab=profile"{% if tab == 'profile' %} class="active" aria-current="page"{% endif %}><span class="i i-info" aria-hidden="true"></span><span>资料</span></a>
+    <a href="{{ base_url }}?tab=features{% if return_to %}&return_to={{ return_to|urlencode }}{% endif %}"{% if tab == 'features' %} class="active" aria-current="page"{% endif %}><span class="i i-sliders" aria-hidden="true"></span><span>群功能</span></a>
+    <a href="{{ base_url }}?tab=plugins{% if return_to %}&return_to={{ return_to|urlencode }}{% endif %}"{% if tab == 'plugins' %} class="active" aria-current="page"{% endif %}><span class="i i-puzzle" aria-hidden="true"></span><span>插件</span><span class="chatroom-tab-count" data-group-plugin-count>{{ detail.binding_summary.effective_enabled_count }}/{{ detail.binding_summary.total }}</span></a>
+    <a href="{{ base_url }}?tab=members{% if return_to %}&return_to={{ return_to|urlencode }}{% endif %}"{% if tab == 'members' %} class="active" aria-current="page"{% endif %}><span class="i i-users" aria-hidden="true"></span><span>成员</span><span class="chatroom-tab-count">{{ detail.members|length }}</span></a>
+    <a href="{{ detail.message_center_href }}&return_to={{ current_list_url|urlencode }}" title="在消息中心查看这个群的消息"><span class="i i-message" aria-hidden="true"></span><span>消息</span><span class="i i-external" aria-hidden="true"></span></a>
+    <a href="{{ base_url }}?tab=profile{% if return_to %}&return_to={{ return_to|urlencode }}{% endif %}"{% if tab == 'profile' %} class="active" aria-current="page"{% endif %}><span class="i i-info" aria-hidden="true"></span><span>资料</span></a>
   </nav>
 
   {% if tab == 'features' %}

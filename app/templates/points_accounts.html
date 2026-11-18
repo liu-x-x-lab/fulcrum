@@ -5,7 +5,7 @@
 <div class="chip-row">
   <span class="chip chip-outline">{{ directory.summary.accounts }} 个账户</span>
   <span class="chip chip-outline">合计 {{ directory.summary.points }} 积分</span>
-  <a class="btn btn-small btn-secondary" href="/points/ledger{% if directory.group_id %}?group_id={{ directory.group_id|urlencode }}{% endif %}"><span class="i i-wallet" aria-hidden="true"></span><span>账单</span></a>
+  <a class="btn btn-small btn-secondary" href="/points/ledger?return_to={{ current_list_url|urlencode }}{% if directory.group_id %}&group_id={{ directory.group_id|urlencode }}{% endif %}"><span class="i i-wallet" aria-hidden="true"></span><span>账单</span></a>
 </div>
 {% endblock %}
 {% block content %}
@@ -24,7 +24,6 @@
   </form>
 
   {% if directory.rows %}
-  {% set back = pager_base.rstrip('?&') %}
   <div class="table-scroll">
   <table class="table">
     <thead><tr><th>成员</th>{% if not directory.group_id %}<th>所在群</th>{% endif %}<th class="col-compact">积分</th><th class="col-action"></th></tr></thead>
@@ -40,7 +39,7 @@
             data-name="{{ item.identity.name }}" data-wxid="{{ item.identity.external_id if item.identity.show_id else '' }}"
             data-avatar="{{ item.identity.avatar_url }}" data-initial="{{ item.identity.initial }}"
             data-group-name="{{ item.group.name }}" data-points="{{ item.points }}">调整积分</button>
-          <a class="btn btn-small btn-secondary" href="/points/ledger?group_id={{ item.group_id|urlencode }}&q={{ item.user_id|urlencode }}"><span class="i i-wallet" aria-hidden="true"></span><span>账单</span></a>
+          <a class="btn btn-small btn-secondary" href="/points/ledger?group_id={{ item.group_id|urlencode }}&q={{ item.user_id|urlencode }}&return_to={{ current_list_url|urlencode }}"><span class="i i-wallet" aria-hidden="true"></span><span>账单</span></a>
         </td>
       </tr>
       {% endfor %}
@@ -70,7 +69,7 @@
       <input type="hidden" name="form_token" id="pa-token" value="" />
       <input type="hidden" name="group_id" id="pa-group" value="" />
       <input type="hidden" name="user_id" id="pa-user" value="" />
-      <input type="hidden" name="back" value="{{ pager_base.rstrip('?&') }}" />
+      <input type="hidden" name="back" value="{{ current_list_url }}" />
       <div class="full-row points-mode" role="radiogroup" aria-label="调整方式">
         <label class="points-mode-option"><input type="radio" name="mode" value="grant" checked /><span>发放</span></label>
         <label class="points-mode-option"><input type="radio" name="mode" value="deduct" /><span>扣减</span></label>

@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.core.db import SessionLocal
-from app.models.saas import PlatformUser
+from app.models.saas import PlatformSession, PlatformUser
 from app.services.image_captcha import CaptchaChallenge, consume_captcha_challenge, create_captcha_challenge
 from app.services.saas_auth import (
     authenticate_platform_user,
@@ -31,6 +31,7 @@ from app.web.auth_common import (
     build_auth_page_context,
     delete_platform_auth_cookies,
     record_auth_event,
+    login_session_expiry,
     platform_session_token,
     request_ip_address,
     request_user_agent,
@@ -51,8 +52,9 @@ def _render_login(
     status_code: int = 200,
     username: str = "",
     challenge: CaptchaChallenge | None = None,
+    remember_me: bool = False,
 ):
-    """渲染平台登录页，任何失败都只回填用户名，不回填密码。"""
+    """渲染平台登录页，失败时保留用户名与记住选择，不回填密码。"""
 
     resolved_challenge = challenge or create_captcha_challenge(purpose=PLATFORM_LOGIN_CAPTCHA_PURPOSE)
     context = build_auth_page_context(
@@ -60,6 +62,7 @@ def _render_login(
         page_title="平台登录",
         notice=notice,
         prefill_username=username,
+        remember_me=remember_me,
         identity_kind="platform",
         captcha_token=resolved_challenge.token,
         captcha_image=resolved_challenge.image_data_uri,
@@ -114,6 +117,7 @@ async def platform_login_action(
     request: Request,
     username: str = Form(""),
     password: str = Form(""),
+    remember_me: bool = Form(False),
     captcha_token: str = Form(""),
     captcha_answer: str = Form(""),
 ):
@@ -138,6 +142,7 @@ async def platform_login_action(
             notice="图形验证码错误或已过期",
             status_code=400,
             username=normalized_username,
+            remember_me=remember_me,
         )
     if not normalized_username or not password:
         record_auth_event(
@@ -152,6 +157,7 @@ async def platform_login_action(
             notice=PLATFORM_LOGIN_ERROR,
             status_code=400,
             username=normalized_username,
+            remember_me=remember_me,
         )
 
     with SessionLocal() as db:
@@ -169,10 +175,12 @@ async def platform_login_action(
                 notice=PLATFORM_LOGIN_ERROR,
                 status_code=401,
                 username=normalized_username,
+                remember_me=remember_me,
             )
         created = create_platform_session(
             db,
             user,
+            expires_at=login_session_expiry(remember_me),
             ip_address=request_ip_address(request),
             user_agent=request_user_agent(request),
         )
@@ -266,6 +274,8 @@ async def platform_password_action(
         if password_error:
             return _render_password_page(request, principal, user, notice=password_error, status_code=400)
 
+        # 改密轮换令牌但保留当前会话的剩余期限，首次改密也不会丢失记住登录。
+        expires_at = db.get(PlatformSession, principal.session_id).expires_at
         revoke_platform_sessions(db, user.id, reason="password_changed")
         user.password_hash = hash_password(new_password)
         user.auth_version += 1
@@ -275,6 +285,7 @@ async def platform_password_action(
         created = create_platform_session(
             db,
             user,
+            expires_at=expires_at,
             ip_address=request_ip_address(request),
             user_agent=request_user_agent(request),
         )

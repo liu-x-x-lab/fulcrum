@@ -47,6 +47,8 @@
         }
         var query = conversationFilters();
         query.set("conversation_id", id);
+        var returnTo = new URLSearchParams(window.location.search).get("return_to");
+        if (returnTo) query.set("return_to", returnTo);
         link.href = "/messages?" + query.toString();
         link.classList.toggle("active", id === conversationId);
         var nameEl = link.querySelector(".wechat-conversation-name");

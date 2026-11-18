@@ -782,6 +782,9 @@ class WechatIpadAdapter(BaseChannelAdapter):
             "ref_type": ref_type,
             "ref_content": ref_content,
         }
+        external_id = (refer.findtext("svrid") or "").strip()
+        if ref_type == 3 and external_id and external_id != "0":
+            payload["ref_external_id"] = external_id
         image_info = self._extract_image_info(ref_content)
         if image_info:
             payload["image_info"] = image_info

@@ -17,6 +17,7 @@ from app.web.auth_common import require_tenant_csrf
 from app.web.chatrooms.directory import _directory_pager_base
 from app.web.shared.access import enforce_role, get_session
 from app.web.shared.presentation import render
+from app.web.shared.urls import safe_return_to
 
 
 logger = get_logger(__name__)
@@ -66,6 +67,7 @@ async def points_ledger_page(request: Request, q: str = "", group_id: str = "", 
             directory=directory,
             groups=group_options(db),
             pager_base=_directory_pager_base("/points/ledger", q=directory["keyword"], group_id=group_id, source=source),
+            back_href=safe_return_to(request.query_params.get("return_to"), "/points"),
         )
     finally:
         db.close()

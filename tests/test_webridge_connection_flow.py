@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from sqlalchemy import select
 
+import app.api.channel_webhooks as webhooks_api
 import app.api.wechat_webridge as bridge_api
 from app.core.settings import settings
 from app.core.logging import ContextFormatter
@@ -48,6 +49,8 @@ def bridge_context(provider_page_context, monkeypatch):
     client, ids = provider_page_context
     monkeypatch.setattr(bridge_api, "SessionLocal", ids["factory"])
     monkeypatch.setattr(bridge_api, "TenantSessionLocal", ids["factory"])
+    monkeypatch.setattr(webhooks_api, "SessionLocal", ids["factory"])
+    monkeypatch.setattr(webhooks_api, "TenantSessionLocal", ids["factory"])
     csrf = _login(client, "admin")
     return client, ids, csrf
 

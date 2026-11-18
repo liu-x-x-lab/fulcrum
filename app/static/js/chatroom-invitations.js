@@ -14,6 +14,9 @@
   const dialog = find('[data-invitation-dialog]');
   const workspace = find('[data-invitation-workspace]');
   const fullscreen = find('[data-invitation-fullscreen]');
+  const memberBrowser = find('[data-invitation-member-browser]');
+  const memberFilter = find('[data-invitation-member-filter]');
+  const memberGrid = find('[data-invitation-member-grid]');
   const nodes = Array.from(panel.querySelectorAll('[data-invitation-node]'), (element) => ({
     key: element.dataset.invitationNode, parentKey: element.dataset.parent,
     connected: element.dataset.connected === 'true', element, children: [],
@@ -28,7 +31,40 @@
     if (node.parent) node.parent.children.push(node);
   });
   const roots = graph.filter((node) => !node.parent);
-  // 初始展示根和第一层被邀请人，让进入页面时即可看到真实连线，同时控制大群首屏密度。
+  const byExternalId = new Map(nodes.map((node) => [node.data.externalId, node]));
+  nodes.forEach((node) => { node.directMembers = []; });
+  // 成员网格使用原始邀请证据，循环关系为展示断边后也不能漏掉被邀请人。
+  nodes.forEach((node) => {
+    const inviter = byExternalId.get(node.data.inviterId);
+    inviter?.directMembers.push(node);
+  });
+  nodes.forEach((node) => {
+    node.directMembers.sort((left, right) => Number(right.data.directInvites) - Number(left.data.directInvites));
+  });
+  const summaries = new Map();
+  graph.filter((node) => node.children.length > 12).forEach((parent) => {
+    const element = document.createElement('li');
+    element.className = 'invitation-graph-node invitation-group-summary';
+    element.dataset.invitationSummary = parent.key;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'invitation-member';
+    button.dataset.invitationMembers = parent.key;
+    const avatars = document.createElement('span');
+    avatars.className = 'invitation-group-avatars';
+    avatars.setAttribute('aria-hidden', 'true');
+    const title = document.createElement('strong');
+    const description = document.createElement('span');
+    description.className = 'invitation-member-note';
+    const action = document.createElement('span');
+    action.className = 'invitation-group-action';
+    action.textContent = '查看成员 →';
+    button.append(avatars, title, description, action);
+    element.append(button);
+    parent.element.parentElement.append(element);
+    summaries.set(parent.key, {key: `summary-${parent.key}`, parent, element, avatars, title, description, children: []});
+  });
+  // 首屏展开一层，大分支只保留邀请链骨架，普通成员汇总后按需查看。
   const expanded = new Set(roots.map((node) => node.key));
   const view = {x: 0, y: 0, scale: 1};
   const cardWidth = 248;
@@ -40,6 +76,12 @@
   let autoFit = true;
   let previousSize = {width: viewport.clientWidth, height: viewport.clientHeight};
   let drag = null;
+  let focusKey = '';
+  let overviewState = null;
+  let memberKey = '';
+  let memberPage = 0;
+  let memberOpener = null;
+  const pageSize = 24;
 
   function applyView() {
     if (!scene) return;
@@ -55,9 +97,16 @@
   function fit() {
     if (!scene || !viewport.clientWidth) return;
     autoFit = true;
-    view.scale = fitScale();
-    view.x = (viewport.clientWidth - bounds.width * view.scale) / 2;
-    view.y = (viewport.clientHeight - bounds.height * view.scale) / 2;
+    // 超宽或超深的图不再被整体缩成细线；保持可阅读尺寸，余下部分由拖动查看。
+    view.scale = Math.max(Math.min(0.75, (viewport.clientWidth - 32) / cardWidth), fitScale());
+    const focused = byKey.get(focusKey);
+    const anchor = focused?.visible ? focused : roots.find((node) => node.visible);
+    view.x = bounds.width * view.scale <= viewport.clientWidth
+      ? (viewport.clientWidth - bounds.width * view.scale) / 2
+      : viewport.clientWidth / 2 - (anchor.x + cardWidth / 2) * view.scale;
+    view.y = bounds.height * view.scale <= viewport.clientHeight
+      ? (viewport.clientHeight - bounds.height * view.scale) / 2
+      : focused?.visible ? viewport.clientHeight / 2 - (focused.y + focused.height / 2) * view.scale : padding;
     applyView();
   }
 
@@ -87,6 +136,9 @@
       node.element.classList.toggle('is-related', related.has(node.key));
       node.select.setAttribute('aria-pressed', String(node.key === selectedKey));
     });
+    memberGrid.querySelectorAll('[data-invitation-grid-select]').forEach((button) => {
+      button.setAttribute('aria-pressed', String(button.dataset.invitationGridSelect === selectedKey));
+    });
     edges?.querySelectorAll('path').forEach((edge) => {
       edge.classList.toggle('is-highlighted', related.has(edge.dataset.from) && related.has(edge.dataset.to));
     });
@@ -95,9 +147,37 @@
   function layout() {
     if (!scene) return;
     const levelHeights = [];
+    const branchLimit = Math.min(6, Math.max(0, Math.floor((viewport.clientWidth - padding * 2) / (cardWidth + gap)) - 1));
+    const focused = byKey.get(focusKey);
+    const scope = new Set();
+    if (focused) {
+      let cursor = focused;
+      while (cursor) {
+        scope.add(cursor.key);
+        cursor = cursor.parent;
+      }
+      focused.children.forEach((child) => scope.add(child.key));
+    }
+    graph.forEach((node) => {
+      const candidates = node.children.filter((child) => !focused || scope.has(child.key));
+      const inviters = candidates.filter((child) => child.children.length);
+      node.shownChildren = candidates.length > 12
+        ? inviters.slice(0, branchLimit) : candidates;
+      const summary = summaries.get(node.key);
+      if (summary) {
+        summary.omitted = candidates.filter((child) => !node.shownChildren.includes(child));
+        summary.title.textContent = `${node.shownChildren.length ? '另有 ' : ''}${summary.omitted.length} 位直属成员`;
+        summary.description.textContent = node.shownChildren.length
+          ? `已优先展示 ${node.shownChildren.length} 位继续邀请的成员`
+          : inviters.length ? `其中 ${inviters.length} 位成员继续邀请，点击查看` : '同一邀请人的成员，集中查看更清楚';
+        summary.avatars.replaceChildren(...summary.omitted.slice(0, 4).map((child) =>
+          child.element.querySelector('.identity-avatar').cloneNode(true)));
+      }
+    });
     // 服务端已输出父节点在前的森林，正序确定可见性，逆序计算子树宽度，全程无递归。
     graph.forEach((node) => {
-      node.visible = !node.parent || node.parent.visible && expanded.has(node.parent.key);
+      node.visible = (!focused || scope.has(node.key)) && (!node.parent ||
+        node.parent.visible && expanded.has(node.parent.key) && node.parent.shownChildren.includes(node));
       node.element.hidden = !node.visible;
       node.level = node.parent ? node.parent.level + 1 : 0;
       if (node.toggle) {
@@ -108,11 +188,19 @@
       }
     });
     const visible = graph.filter((node) => node.visible);
+    summaries.forEach((summary) => {
+      summary.visible = summary.parent.visible && expanded.has(summary.parent.key) && summary.omitted.length > 0;
+      summary.element.hidden = !summary.visible;
+      summary.level = summary.parent.level + 1;
+      if (summary.visible) visible.push(summary);
+    });
     // 一起读取真实卡片高度后再写坐标，长中文昵称、ID 和来源正常换行，不裁切资料。
     visible.forEach((node) => {
       node.height = node.element.offsetHeight;
       levelHeights[node.level] = Math.max(levelHeights[node.level] || 0, node.height);
       node.visibleChildren = node.children.filter((child) => child.visible);
+      const summary = summaries.get(node.key);
+      if (summary?.visible) node.visibleChildren.push(summary);
     });
     for (let index = visible.length - 1; index >= 0; index -= 1) {
       const node = visible[index];
@@ -125,7 +213,7 @@
       bottom += height + 64;
     });
     let left = padding;
-    roots.forEach((node) => {
+    roots.filter((node) => node.visible).forEach((node) => {
       node.start = left;
       left += node.span + gap * 2;
     });
@@ -175,7 +263,92 @@
       find(`[data-invitation-detail-${key}]`).textContent = value;
     });
     inspector.hidden = false;
+    find('[data-invitation-focus]').disabled = !node.connected;
+    find('[data-invitation-detail-members]').disabled = !node.directMembers.length;
     highlight();
+  }
+
+  function renderMembers() {
+    const parent = byKey.get(memberKey);
+    if (!parent) return;
+    const query = memberFilter.value.trim().toLowerCase();
+    const members = parent.directMembers.filter((node) =>
+      `${node.data.name}\n${node.data.externalId}`.toLowerCase().includes(query));
+    const pages = Math.max(1, Math.ceil(members.length / pageSize));
+    memberPage = Math.min(memberPage, pages - 1);
+    const items = members.slice(memberPage * pageSize, (memberPage + 1) * pageSize).map((node) => {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.invitationGridSelect = node.key;
+      button.title = `${node.data.name}（${node.data.externalId}）`;
+      button.setAttribute('aria-pressed', String(node.key === selectedKey));
+      button.append(node.element.querySelector('.identity-cell').cloneNode(true));
+      const id = document.createElement('small');
+      id.textContent = node.data.externalId;
+      const status = document.createElement('span');
+      status.className = 'muted-text';
+      status.textContent = `${node.data.status}${Number(node.data.directInvites) ? ` · 邀请 ${node.data.directInvites} 人` : ''}`;
+      button.append(id, status);
+      item.append(button);
+      return item;
+    });
+    memberGrid.replaceChildren(...items);
+    memberGrid.scrollTop = 0;
+    find('[data-invitation-member-page]').textContent = query
+      ? `匹配 ${members.length} / ${parent.directMembers.length} 人 · 第 ${memberPage + 1} / ${pages} 页`
+      : `共 ${members.length} 人 · 第 ${memberPage + 1} / ${pages} 页`;
+    find('[data-invitation-member-empty]').hidden = members.length > 0;
+    find('[data-invitation-member-prev]').disabled = memberPage === 0;
+    find('[data-invitation-member-next]').disabled = memberPage >= pages - 1;
+  }
+
+  function openMembers(key) {
+    const parent = byKey.get(key);
+    if (!parent) return;
+    memberOpener = document.activeElement;
+    memberKey = key;
+    memberPage = 0;
+    memberFilter.value = '';
+    find('[data-invitation-member-title]').textContent = `${parent.data.name} 直接邀请的成员`;
+    find('[data-invitation-member-subtitle]').textContent = `共 ${parent.directMembers.length} 人 · 点击成员查看详情，可继续聚焦邀请关系`;
+    memberBrowser.hidden = false;
+    renderMembers();
+    memberBrowser.scrollIntoView({block: 'nearest'});
+    memberFilter.focus({preventScroll: true});
+  }
+
+  function focusMember(node) {
+    if (!node.connected) return;
+    if (!focusKey) overviewState = {expanded: new Set(expanded), view: {...view}, autoFit};
+    focusKey = node.key;
+    let cursor = node;
+    while (cursor) {
+      expanded.add(cursor.key);
+      cursor = cursor.parent;
+    }
+    find('[data-invitation-focus-bar]').hidden = false;
+    find('[data-invitation-focus-label]').textContent = `正在查看：${node.data.name} 的上级邀请链与直属成员`;
+    memberBrowser.hidden = true;
+    layout();
+    center(node);
+    viewport.scrollIntoView({block: 'nearest'});
+    node.select.focus({preventScroll: true});
+  }
+
+  function returnOverview() {
+    if (!focusKey) return;
+    focusKey = '';
+    find('[data-invitation-focus-bar]').hidden = true;
+    memberBrowser.hidden = true;
+    expanded.clear();
+    overviewState.expanded.forEach((key) => expanded.add(key));
+    layout();
+    Object.assign(view, overviewState.view);
+    autoFit = overviewState.autoFit;
+    overviewState = null;
+    if (autoFit) fit();
+    else applyView();
   }
 
   function center(node) {
@@ -192,15 +365,9 @@
     if (!node) return;
     select(node);
     if (node.connected) {
-      let parent = node.parent;
-      while (parent) {
-        expanded.add(parent.key);
-        parent = parent.parent;
-      }
-      layout();
-      center(node);
-      viewport.scrollIntoView({block: 'nearest'});
+      focusMember(node);
     } else {
+      returnOverview();
       find('[data-invitation-unlinked]').open = true;
       node.element.scrollIntoView({block: 'nearest'});
     }
@@ -233,6 +400,31 @@
   panel.addEventListener('click', (event) => {
     const target = event.target.closest('button');
     if (!target) return;
+    if (target.hasAttribute('data-invitation-members')) return openMembers(target.dataset.invitationMembers);
+    if (target.hasAttribute('data-invitation-grid-select')) {
+      select(byKey.get(target.dataset.invitationGridSelect));
+      inspector.scrollIntoView({block: 'nearest'});
+      return;
+    }
+    if (target.hasAttribute('data-invitation-member-close')) {
+      memberBrowser.hidden = true;
+      if (memberOpener?.getClientRects().length) memberOpener.focus({preventScroll: true});
+      else viewport.focus({preventScroll: true});
+      return;
+    }
+    if (target.hasAttribute('data-invitation-member-prev') || target.hasAttribute('data-invitation-member-next')) {
+      memberPage += target.hasAttribute('data-invitation-member-prev') ? -1 : 1;
+      renderMembers();
+      memberFilter.focus({preventScroll: true});
+      return;
+    }
+    if (target.hasAttribute('data-invitation-focus')) return focusMember(byKey.get(selectedKey));
+    if (target.hasAttribute('data-invitation-detail-members')) return openMembers(selectedKey);
+    if (target.hasAttribute('data-invitation-overview')) {
+      returnOverview();
+      viewport.focus({preventScroll: true});
+      return;
+    }
     if (target.hasAttribute('data-invitation-result')) return locate(target.dataset.invitationResult);
     if (target.hasAttribute('data-invitation-select')) return select(byKey.get(target.closest('[data-invitation-node]').dataset.invitationNode));
     if (target.hasAttribute('data-invitation-toggle')) {
@@ -274,6 +466,10 @@
     }
   });
 
+  memberFilter.addEventListener('input', () => {
+    memberPage = 0;
+    renderMembers();
+  });
   search.addEventListener('input', searchMembers);
   search.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && matches.length) {
@@ -367,6 +563,7 @@
   function resizeView() {
     const size = {width: viewport.clientWidth, height: viewport.clientHeight};
     if (!size.width || !size.height) return;
+    if (size.width !== previousSize.width) layout();
     if (autoFit) fit();
     else {
       view.x += (size.width - previousSize.width) / 2;

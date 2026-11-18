@@ -56,6 +56,17 @@ wildcard imports, dynamic forwarding and duplicated helpers. Update this map whe
 ownership changes. Use focused tests for affected boundaries rather than adding a
 full regression requirement to every small change.
 
+## Browser login sessions
+
+Tenant and platform login offer an unchecked **Remember me** option.
+Selecting it creates a fixed 30-day database session and persistent browser cookies.
+Without it, the configured normal session lifetime applies (12 hours by default).
+Session tokens use HttpOnly cookies; passwords are never stored in browser storage.
+The paired CSRF cookie has the same remaining lifetime. Activity does not extend
+expiry. Logout revokes the current session; password changes revoke old sessions
+and issue new credentials for the current browser with its original expiry.
+Tenant and platform identity tables and cookie paths remain separate.
+
 ## Shared external services
 
 These are platform integrations, not dependencies for each plugin to install.

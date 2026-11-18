@@ -40,7 +40,7 @@ function openPage(replies, options = {}) {
   const selectors = new Map();
   const categories = ['friend', 'deleted', 'unknown'];
   const fields = ['result-body', 'result-count', 'result-empty', 'pagination', 'page-summary', 'page-label',
-    'page-prev', 'page-next', 'select-all', 'clear-selection', 'selection-count', 'select-page'];
+    'page-prev', 'page-next', 'page-number', 'page-size', 'select-all', 'clear-selection', 'selection-count', 'select-page'];
   categories.forEach((category) => fields.forEach((field) => selectors.set(`[data-${field}="${category}"]`, element())));
   const root = Object.assign(element(), {dataset: {canEdit: options.editable === false ? 'false' : 'true'},
     querySelector(selector) { assert.ok(selectors.has(selector), selector); return selectors.get(selector); },
@@ -70,8 +70,101 @@ function openPage(replies, options = {}) {
   const click = async (name) => { if (!parts.get(name).disabled) await parts.get(name).handlers.click({preventDefault() {}}); await settle(); };
   const switchChannel = async (id) => { parts.get('channel').value = String(id); parts.get('channel').handlers.change(); await settle(); };
   const text = (field, category) => selectors.get(`[data-${field}="${category}"]`).textContent;
-  return {parts, state, root, selectors, click, switchChannel, text};
+  const field = (name, category = 'friend') => selectors.get(`[data-${name}="${category}"]`);
+  const turnPage = (direction, category = 'friend') => {
+    const button = field(`page-${direction}`, category);
+    button.dataset = {[direction === 'prev' ? 'pagePrev' : 'pageNext']: category};
+    root.handlers.click({target: {closest: () => button}});
+  };
+  const jumpPage = (number, category = 'friend') => {
+    field('page-number', category).value = String(number);
+    let prevented = false;
+    root.handlers.submit({target: {closest: () => ({dataset: {pageJump: category}})},
+      preventDefault() { prevented = true; }});
+    assert.ok(prevented);
+  };
+  const changePageSize = (size, category = 'friend') => {
+    const control = field('page-size', category);
+    control.value = String(size); control.dataset.pageSize = category; control.hasAttribute = () => false;
+    root.handlers.change({target: control});
+  };
+  return {parts, state, root, selectors, click, switchChannel, text, field, turnPage, jumpPage, changePageSize};
 }
+
+const manyResults = (count, overrides = {}) => snapshot({
+  total: count, cursor: count, status: 'completed',
+  contacts: Array.from({length: count}, (_, index) => contact(index + 1)),
+  results: Array.from({length: count}, (_, index) => result(index + 1)), ...overrides,
+});
+
+test('分类分页支持指定页和双向翻页，边界禁用且非法页码不会跳转', async () => {
+  const page = openPage([manyResults(125)]);
+  await settle();
+  assert.equal(page.field('page-prev').disabled, true);
+  assert.equal(page.field('page-next').disabled, false);
+  assert.equal(page.field('page-number').max, '3');
+  page.turnPage('prev');
+  assert.equal(page.text('page-label', 'friend'), '1 / 3');
+  page.jumpPage(3);
+  assert.equal(page.text('page-label', 'friend'), '3 / 3');
+  assert.equal(page.field('page-prev').disabled, false);
+  assert.equal(page.field('page-next').disabled, true);
+  assert.match(page.text('page-summary', 'friend'), /第 101–125 位/);
+  for (const invalid of [0, 4, 1.5, 'abc']) {
+    page.jumpPage(invalid);
+    assert.equal(page.text('page-label', 'friend'), '3 / 3');
+  }
+  page.turnPage('prev');
+  assert.equal(page.text('page-label', 'friend'), '2 / 3');
+  assert.equal(page.field('page-number').value, '2');
+  page.turnPage('next');
+  assert.equal(page.text('page-label', 'friend'), '3 / 3');
+  assert.equal(page.state.requests.length, 1);
+});
+
+test('同次检测重新读取保留页码和每页条数，结果缩小时夹到最后一页', async () => {
+  const page = openPage([manyResults(125), manyResults(125), manyResults(30),
+    manyResults(125, {generation: 'new-generation'})]);
+  await settle();
+  page.changePageSize(25);
+  page.jumpPage(5);
+  page.state.events.pageshow({persisted: true});
+  await settle();
+  assert.equal(page.text('page-label', 'friend'), '5 / 5');
+  page.state.events.pageshow({persisted: true});
+  await settle();
+  assert.equal(page.text('page-label', 'friend'), '2 / 2');
+  assert.equal(page.field('page-number').max, '2');
+  page.state.events.pageshow({persisted: true});
+  await settle();
+  assert.equal(page.text('page-label', 'friend'), '1 / 5');
+});
+
+test('读取失败后重试保留原页，切换账号则重置页码', async () => {
+  const saved = manyResults(125);
+  const page = openPage([saved, new TypeError('offline'), saved, saved]);
+  await settle();
+  page.jumpPage(3);
+  page.state.events.pageshow({persisted: true});
+  await settle();
+  await page.click('reload');
+  assert.equal(page.text('page-label', 'friend'), '3 / 3');
+  await page.switchChannel(2);
+  assert.equal(page.text('page-label', 'friend'), '1 / 3');
+});
+
+test('继续检测及最终暂停快照保留当前页', async () => {
+  const saved = manyResults(125, {status: 'paused', total: 126, cursor: 125,
+    interval_seconds: 0, contacts: Array.from({length: 126}, (_, index) => contact(index + 1))});
+  const page = openPage([saved, saved, {job_id: 903},
+    {state: 'completed', result: result(126), progress: progress({cursor: 126, total: 126})}, manyResults(126)]);
+  await settle();
+  page.jumpPage(3);
+  await page.click('start');
+  assert.equal(page.text('page-label', 'friend'), '3 / 3');
+  assert.match(page.text('page-summary', 'friend'), /第 101–126 位/);
+  assert.equal(page.state.requests.at(-1).url, '/contacts/check/1/pause');
+});
 
 test('重新打开页面从服务端恢复结果、进度和间隔，不自动创建任务', async () => {
   const saved = snapshot({interval_seconds: 2.5});

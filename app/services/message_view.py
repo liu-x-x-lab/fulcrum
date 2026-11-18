@@ -195,6 +195,10 @@ def parse_quote_payload(content: object) -> dict[str, Any] | None:
         "ref_name": _text(refer.findtext("displayname", "")),
     }
     if payload["ref_type"] == 3:
+        # 微信上报的是外部消息编号，不是本地消息主键；原样保留精度。
+        external_id = (refer.findtext("svrid") or "").strip()
+        if external_id and external_id != "0":
+            payload["ref_external_id"] = external_id
         info = _image_info(refer_text)
         if info:
             payload["image_info"] = info

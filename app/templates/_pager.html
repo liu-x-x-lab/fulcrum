@@ -1,11 +1,18 @@
-{# 通用上一页/下一页:沿用当前查询条件,只替换页码。需要变量 directory.paging 与 pager_base。 #}
-{% set p = directory.paging %}
-{% if p.total_pages > 1 %}
-<div class="list-pagination">
-  <div class="list-pagination-summary">第 {{ p.page }} / {{ p.total_pages }} 页,共 {{ p.total }} 条</div>
+{# 翻页与跳页共用当前 URL 的筛选条件；日志等流式列表允许不提供总页数。 #}
+{% set p = paging if paging is defined else directory.paging %}
+{% set previous_label = pager_prev_label|default('上一页') %}
+{% set next_label = pager_next_label|default('下一页') %}
+{% set transient_params = ('notice', 'tone', 'selection_cleared', 'operation_jobs', 'operation_channel') %}
+{% set paging_url = request.url.remove_query_params(transient_params) %}
+<nav class="list-pagination" aria-label="{{ pager_label|default('列表分页') }}">
+  <div class="list-pagination-summary">第 {{ p.page }}{% if p.total_pages %} / {{ p.total_pages }}{% endif %} 页{% if p.total is defined %}，共 {{ p.total }} 条{% endif %}{% if pager_summary is defined %} · {{ pager_summary }}{% endif %}</div>
   <div class="list-pagination-actions">
-    {% if p.has_prev %}<a class="btn btn-secondary btn-icon" href="{{ pager_base }}&page={{ p.page - 1 }}" title="上一页" aria-label="上一页"><span class="i i-chevron-left" aria-hidden="true"></span></a>{% endif %}
-    {% if p.has_next %}<a class="btn btn-secondary btn-icon" href="{{ pager_base }}&page={{ p.page + 1 }}" title="下一页" aria-label="下一页"><span class="i i-chevron-right" aria-hidden="true"></span></a>{% endif %}
+    {% if p.has_prev %}<a class="btn btn-secondary" href="{{ request.url.path }}?{{ paging_url.include_query_params(page=p.page - 1).query }}">{{ previous_label }}</a>{% else %}<button class="btn btn-secondary" type="button" disabled>{{ previous_label }}</button>{% endif %}
+    {% if p.has_next %}<a class="btn btn-secondary" href="{{ request.url.path }}?{{ paging_url.include_query_params(page=p.page + 1).query }}">{{ next_label }}</a>{% else %}<button class="btn btn-secondary" type="button" disabled>{{ next_label }}</button>{% endif %}
+    <form method="get" action="{{ request.url.path }}" class="list-pagination-jump">
+      {% for name, value in request.query_params.multi_items() if name != 'page' and name not in transient_params %}<input type="hidden" name="{{ name }}" value="{{ value }}" />{% endfor %}
+      <label>第 <input type="number" name="page" min="1"{% if p.total_pages %} max="{{ p.total_pages }}"{% endif %} value="{{ p.page }}" step="1" inputmode="numeric" aria-label="页码" required /> 页</label>
+      <button class="btn btn-secondary" type="submit">跳转</button>
+    </form>
   </div>
-</div>
-{% endif %}
+</nav>

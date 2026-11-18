@@ -337,3 +337,111 @@ def test_legacy_mba_auth_cookie_cannot_create_new_saas_identity(
     with session_factory() as db:
         assert db.scalar(select(TenantSession)) is None
         assert db.scalar(select(PlatformSession)) is None
+
+
+@pytest.mark.parametrize("platform", [False, True])
+@pytest.mark.parametrize("remember", [None, "false", "true"])
+def test_login_remember_me_lifetime_and_expiry(client, identities, session_factory, monkeypatch, platform, remember):
+    """Cookie 与数据库期限一致；恢复浏览器凭证可继续登录，绝对期限到达后拒绝。"""
+    from datetime import timedelta
+    from app.core.settings import settings
+    from app.core.time import ensure_shanghai_datetime, now_shanghai
+    import app.services.saas_auth as auth
+
+    prefix = "/platform" if platform else ""
+    name = PLATFORM_SESSION_COOKIE if platform else TENANT_SESSION_COOKIE
+    csrf_name = PLATFORM_CSRF_COOKIE if platform else TENANT_CSRF_COOKIE
+    model = PlatformSession if platform else TenantSession
+    data = ({"username": "ops", "password": PLATFORM_PASSWORD, **platform_login_captcha()} if platform else
+            {"mobile": "13600136000", "password": TENANT_PASSWORD, **tenant_login_captcha()})
+    if remember is not None:
+        data["remember_me"] = remember
+    before = now_shanghai()
+    login = client.post(prefix + "/login", data=data)
+    assert login.status_code == 303
+    cookie = _response_cookie(login, name)
+    csrf = _response_cookie(login, csrf_name)
+    lifetime = 30 * 86400 if remember == "true" else max(300, settings.auth_cookie_max_age_seconds)
+    assert lifetime - 5 <= int(cookie["max-age"]) <= lifetime
+    assert csrf["max-age"] == cookie["max-age"]
+    _assert_session_cookie(cookie, expected_path=prefix or "/")
+    _assert_csrf_cookie(csrf, expected_path=prefix or "/")
+    with session_factory() as db:
+        row = db.scalar(select(model).where(model.session_token_hash == hash_credential(cookie.value)))
+        expiry = ensure_shanghai_datetime(row.expires_at)
+        assert lifetime <= (expiry - before).total_seconds() <= lifetime + 5
+    # 模拟浏览器重开后恢复持久化 Cookie；服务端只认随机令牌，不依赖浏览器内存。
+    client.cookies.clear()
+    client.cookies.set(name, cookie.value, path=prefix or "/")
+    monkeypatch.setattr(auth, "now_shanghai", lambda: expiry - timedelta(seconds=1))
+    assert client.get(prefix + "/login").status_code == 303
+    monkeypatch.setattr(auth, "now_shanghai", lambda: expiry + timedelta(seconds=1))
+    assert client.get(prefix + "/login").status_code == 200
+
+
+@pytest.mark.parametrize("platform", [False, True])
+def test_remember_me_password_rotation_and_logout(client, identities, session_factory, platform):
+    """改密后新令牌沿用剩余期限、旧令牌作废；退出也必须吊销长期登录。"""
+    from app.core.time import ensure_shanghai_datetime
+    from app.services.saas_auth import load_platform_principal, load_tenant_principal
+
+    prefix = "/platform" if platform else ""
+    name = PLATFORM_SESSION_COOKIE if platform else TENANT_SESSION_COOKIE
+    csrf_name = PLATFORM_CSRF_COOKIE if platform else TENANT_CSRF_COOKIE
+    model = PlatformSession if platform else TenantSession
+    load = load_platform_principal if platform else load_tenant_principal
+    password = PLATFORM_PASSWORD if platform else TENANT_PASSWORD
+    data = ({"username": "ops", **platform_login_captcha()} if platform else
+            {"mobile": "13600136000", **tenant_login_captcha()})
+    login = client.post(prefix + "/login", data={**data, "password": password, "remember_me": "true"})
+    assert login.status_code == 303
+    old = _response_cookie(login, name)
+    with session_factory() as db:
+        expiry = db.scalar(select(model.expires_at).where(model.session_token_hash == hash_credential(old.value)))
+    changed = client.post(prefix + "/profile/password", data={
+        "current_password": password, "new_password": "New-secret-456", "confirm_password": "New-secret-456",
+        "csrf_token": _response_cookie(login, csrf_name).value,
+    })
+    assert changed.status_code == 303
+    current = _response_cookie(changed, name)
+    assert current.value != old.value
+    assert 29 * 86400 < int(current["max-age"]) <= 30 * 86400
+    with session_factory() as db:
+        assert load(db, old.value, touch=False) is None
+        assert load(db, current.value, touch=False) is not None
+        new_expiry = db.scalar(select(model.expires_at).where(model.session_token_hash == hash_credential(current.value)))
+        assert ensure_shanghai_datetime(new_expiry) == ensure_shanghai_datetime(expiry)
+    logout = client.post(prefix + "/logout", data={"csrf_token": _response_cookie(changed, csrf_name).value})
+    assert logout.status_code == 303
+    _assert_deleted_cookie(logout, name, expected_path=prefix or "/")
+    _assert_deleted_cookie(logout, csrf_name, expected_path=prefix or "/")
+    with session_factory() as db:
+        assert load(db, current.value, touch=False) is None
+
+
+@pytest.mark.parametrize("platform", [False, True])
+@pytest.mark.parametrize("failure", ["captcha", "password", "missing"])
+def test_remember_me_default_and_failed_form(client, identities, platform, failure):
+    """默认不勾选；验证码、凭证及必填校验失败保留选择但不签发身份。"""
+    import re
+
+    prefix = "/platform" if platform else ""
+    name = PLATFORM_SESSION_COOKIE if platform else TENANT_SESSION_COOKIE
+    page = client.get(prefix + "/login")
+    checkbox = re.search(r'<input[^>]*name="remember_me"[^>]*>', page.text)
+    assert checkbox is not None and "checked" not in checkbox.group()
+    assert "记住我（30天）" not in page.text
+    data = ({"username": "ops", **platform_login_captcha()} if platform else
+            {"mobile": "13600136000", **tenant_login_captcha()})
+    data.update(password="incorrect-password", remember_me="true")
+    if failure == "captcha":
+        data["captcha_answer"] = "invalid"
+    elif failure == "missing":
+        data["password"] = ""
+    response = client.post(prefix + "/login", data=data)
+    assert response.status_code == (401 if failure == "password" else 400)
+    assert name not in response.headers.get("set-cookie", "")
+    checkbox = re.search(r'<input[^>]*name="remember_me"[^>]*>', response.text)
+    assert checkbox is not None and "checked" in checkbox.group()
+    password_input = re.search(r'<input[^>]*name="password"[^>]*>', response.text)
+    assert password_input is not None and "value=" not in password_input.group()

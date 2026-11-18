@@ -35,6 +35,7 @@ from app.web.auth_common import require_tenant_csrf
 from app.web.shared.access import enforce_role, get_session
 from app.web.shared.operations import _csrf_from_header
 from app.web.shared.presentation import format_beijing_time, render, templates
+from app.web.shared.urls import safe_return_to
 
 
 router = APIRouter()
@@ -492,6 +493,7 @@ async def messages_page(
             conversation_summaries=conversation_summaries,
             selected_conversation_id=conversation_id,
             selected_chatroom=selected_chatroom,
+            back_href=safe_return_to(request.query_params.get("return_to"), ""),
             bot_id=bot_id,
             channel_id=channel_id,
             chat_type=normalize_kind(chat_type),

@@ -45,7 +45,7 @@
     <tbody>
       {% for item in directory.rows %}
       <tr>
-        <td><a href="/channels/{{ item.channel_id }}/chatrooms/{{ item.id }}" style="text-decoration:none;color:inherit;">{{ identity(item.identity, 'lg') }}</a></td>
+        <td><a href="/channels/{{ item.channel_id }}/chatrooms/{{ item.id }}?return_to={{ current_list_url|urlencode }}" style="text-decoration:none;color:inherit;">{{ identity(item.identity, 'lg') }}</a></td>
         {% if channels|length > 1 %}<td class="muted-text">{{ item.channel_name }}</td>{% endif %}
         <td class="col-compact">{{ item.member_count or '-' }}</td>
         <td class="col-time">{{ item.last_seen_at|bj_time if item.last_seen_at else '-' }}</td>
@@ -65,7 +65,7 @@
             <span class="ui-switch-track"></span>
           </span>
           {% endif %}
-          <a class="btn btn-small btn-secondary" href="/channels/{{ item.channel_id }}/chatrooms/{{ item.id }}"><span class="i i-settings" aria-hidden="true"></span><span>设置</span></a>
+          <a class="btn btn-small btn-secondary" href="/channels/{{ item.channel_id }}/chatrooms/{{ item.id }}?return_to={{ current_list_url|urlencode }}"><span class="i i-settings" aria-hidden="true"></span><span>设置</span></a>
           </div>
         </td>
       </tr>

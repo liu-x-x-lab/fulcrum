@@ -1,7 +1,7 @@
 {# 本群插件与群功能共用可展开卡片；所有字段均来自服务端非敏感声明式视图。 #}
 {% set settings = item.settings %}
 {% set settings_url = base_url ~ '/plugins/' ~ item.binding_id ~ '/settings' %}
-<form method="post" action="{{ settings_url }}" class="gf-card chatroom-plugin-card{% if settings.enabled %} is-on{% endif %}" data-gf-card data-group-plugin-settings data-gf-key="group-plugin-{{ channel.id }}-{{ detail.chatroom_id }}-{{ item.binding_id }}" data-gf-save-url="{{ settings_url }}">
+<form method="post" action="{{ settings_url }}{{ return_query }}" class="gf-card chatroom-plugin-card{% if settings.enabled %} is-on{% endif %}" data-gf-card data-group-plugin-settings data-gf-key="group-plugin-{{ channel.id }}-{{ detail.chatroom_id }}-{{ item.binding_id }}" data-gf-save-url="{{ settings_url }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
   <header class="gf-head">
     <div class="gf-head-copy">
@@ -49,6 +49,6 @@
   </div>
 </form>
 {# HTML 不允许嵌套表单，完整恢复沿用既有模式路由，刷新后重新展示继承值。 #}
-<form id="reset-group-plugin-{{ item.binding_id }}" method="post" action="{{ base_url }}/scopes/{{ item.binding_id }}/mode" hidden>
+<form id="reset-group-plugin-{{ item.binding_id }}" method="post" action="{{ base_url }}/scopes/{{ item.binding_id }}/mode{{ return_query }}" hidden>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><input type="hidden" name="mode" value="inherited" />
 </form>
