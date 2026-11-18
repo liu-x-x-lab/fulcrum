@@ -24,7 +24,7 @@ from app.core.db import Base
 from app.core.tenant_context import tenant_scope
 from app.core.tenant_db import platform_session, tenant_session
 from app.core.time import now_shanghai
-from app.models.entities import Bot, BotPlugin, Channel, Conversation, Plugin, TaskJob, WeatherSubscription
+from app.models.entities import Bot, BotPlugin, Channel, Chatroom, Conversation, GroupPluginScope, Plugin, TaskJob, WeatherSubscription
 from app.models.saas import Tenant
 from app.services.plugin_runtime.contracts import PluginExecutionResult
 from app.services.plugin_runtime.scheduler import (
@@ -364,8 +364,8 @@ def test_due_schedule_scanner_creates_all_plugin_jobs_once(scheduler_fixture) ->
         second = schedule_due_plugin_actions(db, now=current + timedelta(seconds=5))
         db.commit()
 
+        # daily_news 改为声明式计划后遵守 08:30 的两分钟触发窗口；10:00 扫描不再补发当天任务。
         assert sorted(job.related_type for job in first) == [
-            "plugin_action:baidu_news_daily_push",
             "plugin_action:daily_ranking_prepare",
             "plugin_action:daily_ranking_push",
             "plugin_action:daily_summary",
@@ -418,6 +418,113 @@ def test_due_schedule_scanner_creates_all_plugin_jobs_once(scheduler_fixture) ->
         member_context_jobs = [job for job in first if "member_context" in str(job.related_type)]
         assert len(member_context_jobs) == 1
         assert parse_job_payload(member_context_jobs[0])["conversation_id"] == identity["alpha_conversation_id"]
+
+
+def test_group_schedule_override_creates_conversation_scoped_job(scheduler_fixture, monkeypatch) -> None:
+    """群详情保存的定时开关和时间必须进入调度，而不是只躺在覆盖配置里。"""
+
+    from app.core.settings import settings
+    from app.services import plugin_directory
+
+    factory, identity = scheduler_fixture
+    monkeypatch.setattr(settings, "plugins_dir", str(PROJECT_ROOT / "plugins"))
+    plugin_directory._SCAN_CACHE.clear()
+    try:
+        with tenant_scope(identity["alpha_tenant_id"]), tenant_session(factory) as db:
+            plugin = Plugin(code="idiom_guess", display_name="看图猜成语", plugin_type="message")
+            db.add(plugin)
+            db.flush()
+            room = Chatroom(
+                tenant_id=identity["alpha_tenant_id"],
+                bot_id=identity["alpha_bot_id"],
+                channel_id=db.scalars(select(Channel).where(Channel.bot_id == identity["alpha_bot_id"])).first().id,
+                external_id="room-alpha",
+                name="甲群",
+                status="active",
+                management_status="enabled",
+                is_active=True,
+            )
+            db.add(room)
+            db.flush()
+            binding = BotPlugin(
+                tenant_id=identity["alpha_tenant_id"],
+                bot_id=identity["alpha_bot_id"],
+                plugin_id=plugin.id,
+                status="enabled",
+                config_json=json.dumps({"scheduled_enabled": False, "send_time": "18:00"}),
+            )
+            db.add(binding)
+            db.flush()
+            db.add(GroupPluginScope(
+                tenant_id=identity["alpha_tenant_id"],
+                channel_id=room.channel_id,
+                chatroom_id=room.id,
+                bot_plugin_id=binding.id,
+                scope_status="overridden",
+                enabled=True,
+                action_scope="all",
+                config_override_json=json.dumps({"scheduled_enabled": True, "send_time": "17:05"}),
+            ))
+            db.commit()
+
+            current = now_shanghai().replace(
+                year=2026, month=11, day=17, hour=17, minute=5, second=30, microsecond=0
+            )
+            jobs = schedule_due_plugin_actions(db, now=current)
+            db.commit()
+
+            idiom_jobs = [job for job in jobs if job.related_type == "plugin_action:idiom_daily_start"]
+            assert len(idiom_jobs) == 1
+            assert idiom_jobs[0].related_type == "plugin_action:idiom_daily_start"
+            assert parse_job_payload(idiom_jobs[0])["conversation_id"] == identity["alpha_conversation_id"]
+            assert idiom_jobs[0].available_at == current.replace(second=0, microsecond=0)
+    finally:
+        plugin_directory._SCAN_CACHE.clear()
+
+
+def test_daily_news_group_time_override_bypasses_global_last_push_date(scheduler_fixture) -> None:
+    """每日新闻的声明式计划也要识别群级 push_time，不能被全局 last_push_date 挡住。"""
+
+    factory, identity = scheduler_fixture
+    with tenant_scope(identity["alpha_tenant_id"]), tenant_session(factory) as db:
+        binding = db.get(BotPlugin, identity["alpha_daily_binding_id"])
+        assert binding is not None
+        binding.config_json = json.dumps({"push_time": "08:30", "last_push_date": "2026-11-17"})
+        channel_id = db.scalars(select(Channel).where(Channel.bot_id == identity["alpha_bot_id"])).first().id
+        room = Chatroom(
+            tenant_id=identity["alpha_tenant_id"],
+            bot_id=identity["alpha_bot_id"],
+            channel_id=channel_id,
+            external_id="room-alpha",
+            name="甲群",
+            status="active",
+            management_status="enabled",
+            is_active=True,
+        )
+        db.add(room)
+        db.flush()
+        db.add(GroupPluginScope(
+            tenant_id=identity["alpha_tenant_id"],
+            channel_id=channel_id,
+            chatroom_id=room.id,
+            bot_plugin_id=binding.id,
+            scope_status="overridden",
+            enabled=True,
+            action_scope="all",
+            config_override_json=json.dumps({"push_time": "17:35"}),
+        ))
+        db.commit()
+
+        current = now_shanghai().replace(
+            year=2026, month=11, day=17, hour=17, minute=35, second=30, microsecond=0
+        )
+        jobs = schedule_due_plugin_actions(db, now=current)
+        db.commit()
+
+        news_jobs = [job for job in jobs if job.related_type == "plugin_action:baidu_news_daily_push"]
+        assert len(news_jobs) == 1
+        assert parse_job_payload(news_jobs[0])["conversation_id"] == identity["alpha_conversation_id"]
+        assert news_jobs[0].available_at == current.replace(second=0, microsecond=0)
 
 
 @pytest.mark.parametrize(

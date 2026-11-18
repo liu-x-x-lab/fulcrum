@@ -260,6 +260,9 @@ default time and a 30–3600-second grace window; missed windows are skipped.
 [`app/core/time.py`](../app/core/time.py) for deduplication and Shanghai time.
 
 Scheduled context identifies tenant, binding and bot, usually no conversation.
+Group-level overrides of schedule fields produce additional jobs tagged with
+`conversation_id`; the binding-level job still runs. A scheduled plugin must skip
+groups that own a schedule override in its global run and deduplicate per group.
 Resolve owned targets and check binding/bot/channel availability, enabled groups
 and current plugin scope before calling `enqueue_outbound_job` with `plugin_code`.
 Use `high_side_effect = true` for sends/external changes and avoid automatic

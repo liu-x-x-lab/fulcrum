@@ -61,6 +61,35 @@ def test_save_group_settings_preserves_disabled_scope_and_other_groups(group_set
     assert 'data-group-plugin-settings' in page and 'aria-current="page"' in page
 
 
+def test_daily_news_group_push_time_is_editable_and_saved_as_override(group_settings_context):
+    """声明式定时插件的群级时间必须能通过群详情保存，调度器才会看到覆盖。"""
+
+    client, ids = group_settings_context
+    csrf = _login(client, 'operator')
+    with ids['factory']() as db:
+        plugin = db.scalar(select(Plugin).where(Plugin.code == 'daily_news'))
+        assert plugin is not None
+        binding = BotPlugin(tenant_id=ids['alpha'], bot_id=ids['bot'], plugin_id=plugin.id, status='enabled',
+                            config_json=json.dumps({'push_time': '08:30'}))
+        db.add(binding)
+        db.commit()
+        binding_id = int(binding.id)
+
+    target_ids = {**ids, 'binding': binding_id}
+    response = client.post(settings_url(target_ids), data={
+        'csrf_token': csrf,
+        'schema__push_time': '17:35',
+    }, headers={'X-Requested-With': 'fetch'})
+    assert response.status_code == 200, response.text
+    assert response.json()['ok']
+    with ids['factory']() as db:
+        scope = db.scalar(select(GroupPluginScope).where(
+            GroupPluginScope.chatroom_id == ids['room'],
+            GroupPluginScope.bot_plugin_id == binding_id,
+        ))
+        assert json.loads(scope.config_override_json) == {'push_time': '17:35'}
+
+
 def test_reset_config_keeps_explicit_group_switch(group_settings_context):
     client, ids = group_settings_context
     csrf = _login(client, 'admin')

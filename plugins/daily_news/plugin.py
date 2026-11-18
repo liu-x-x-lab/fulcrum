@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.time import now_shanghai
-from app.models.entities import BotPlugin, Channel, Conversation
+from app.models.entities import BotPlugin, Channel, Chatroom, Conversation, GroupPluginScope, PluginStateRecord
 from app.services.outbound_batch import enqueue_outbound_jobs_by_conversation
 from app.services.plugin_runtime.contracts import PluginExecutionRequest, PluginExecutionResult
 from app.services.plugin_runtime.http_client import PluginHttpClient, PluginHttpResponse
@@ -19,6 +20,88 @@ from app.services.plugin_runtime.http_client import PluginHttpClient, PluginHttp
 SCHEDULE_ACTION_KEY = "baidu_news_daily_push"
 DEFAULT_USER_AGENT = "fulcrum/1.0"
 CHINESE_WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
+STATE_NAMESPACE = "daily_news"
+
+
+def _group_state_key(conversation: Conversation) -> str:
+    raw = f"{conversation.channel_id}:{conversation.external_id}".encode("utf-8")
+    return "group:" + hashlib.sha256(raw).hexdigest()[:32]
+
+
+def _push_time_override_chatrooms(db: Session, binding: BotPlugin) -> set[int]:
+    """单群改过推送时间的群不再参加绑定级全局推送，避免一天收两次。"""
+    scopes = db.scalars(
+        select(GroupPluginScope).where(
+            GroupPluginScope.bot_plugin_id == binding.id,
+            GroupPluginScope.tenant_id == binding.tenant_id,
+            GroupPluginScope.enabled.is_(True),
+            GroupPluginScope.config_override_json.isnot(None),
+        )
+    ).all()
+    result: set[int] = set()
+    for scope in scopes:
+        if "push_time" in _parse_json_object(scope.config_override_json):
+            result.add(int(scope.chatroom_id))
+    return result
+
+
+def _group_pushed_conversation_ids(
+    db: Session,
+    binding: BotPlugin,
+    conversations: list[Conversation],
+    today: str,
+) -> set[int]:
+    """一次读出这些群今天是否已经推送过，避免逐群查询。"""
+
+    conversation_ids_by_key = {_group_state_key(item): int(item.id) for item in conversations}
+    if not conversation_ids_by_key:
+        return set()
+    rows = db.scalars(
+        select(PluginStateRecord).where(
+            PluginStateRecord.tenant_id == binding.tenant_id,
+            PluginStateRecord.bot_plugin_id == binding.id,
+            PluginStateRecord.namespace == STATE_NAMESPACE,
+            PluginStateRecord.state_key.in_(tuple(conversation_ids_by_key)),
+        )
+    ).all()
+    return {
+        conversation_ids_by_key[row.state_key]
+        for row in rows
+        if str(_parse_json_object(row.payload_json).get("last_push_date") or "") == today
+    }
+
+
+def _mark_groups_pushed(db: Session, binding: BotPlugin, state_keys: list[str], today: str) -> None:
+    """只记录真正创建了出站任务的群；同一群一天只保留一条状态。"""
+
+    if not state_keys:
+        return
+    rows = db.scalars(
+        select(PluginStateRecord).where(
+            PluginStateRecord.tenant_id == binding.tenant_id,
+            PluginStateRecord.bot_plugin_id == binding.id,
+            PluginStateRecord.namespace == STATE_NAMESPACE,
+            PluginStateRecord.state_key.in_(tuple(state_keys)),
+        )
+    ).all()
+    existing = {row.state_key: row for row in rows}
+    payload = json.dumps({"last_push_date": today}, ensure_ascii=False, sort_keys=True)
+    for key in state_keys:
+        row = existing.get(key)
+        if row is None:
+            db.add(
+                PluginStateRecord(
+                    tenant_id=binding.tenant_id,
+                    bot_plugin_id=binding.id,
+                    namespace=STATE_NAMESPACE,
+                    state_key=key,
+                    payload_json=payload,
+                )
+            )
+        else:
+            row.payload_json = payload
+    # 同一任务内可能连续执行/复核，立即刷新保证幂等查询读到刚写入的日期。
+    db.flush()
 
 
 @dataclass(frozen=True)
@@ -74,7 +157,9 @@ def execute_scheduled_action(db: Session, request: PluginExecutionRequest) -> Pl
     current = now_shanghai()
     config = _load_config(request.config)
     today = current.strftime("%Y-%m-%d")
-    if config.last_push_date == today:
+    targeted_conversation_id = int(request.context.conversation_id) if request.context.conversation_id else None
+    # 绑定级 last_push_date 只约束全局计划；单群任务改用每个群的推送状态。
+    if not targeted_conversation_id and config.last_push_date == today:
         return PluginExecutionResult(
             ok=True,
             status="skipped",
@@ -82,20 +167,60 @@ def execute_scheduled_action(db: Session, request: PluginExecutionRequest) -> Pl
             output={"reason": "already_pushed"},
         )
 
+    if targeted_conversation_id:
+        conversations = _resolve_target_conversations(db, binding.bot_id, conversation_id=targeted_conversation_id)
+        if not conversations:
+            return PluginExecutionResult(
+                ok=False,
+                status="error",
+                message="每日新闻目标群聊不可用。",
+                output={"reason": "target_unavailable", "target_count": 0},
+            )
+        pushed_today = _group_pushed_conversation_ids(db, binding, conversations, today)
+        conversations = [item for item in conversations if int(item.id) not in pushed_today]
+        if not conversations:
+            return PluginExecutionResult(
+                ok=True,
+                status="skipped",
+                message="今日新闻该群已经推送。",
+                output={"reason": "already_pushed", "target_count": 0},
+            )
+    else:
+        all_conversations = _resolve_target_conversations(db, binding.bot_id)
+        if not all_conversations:
+            return PluginExecutionResult(
+                ok=False,
+                status="error",
+                message="每日新闻没有可推送的启用群聊。",
+                output={"reason": "no_target_conversations", "target_count": 0},
+            )
+        conversations = _exclude_schedule_override_chatrooms(
+            db, all_conversations, _push_time_override_chatrooms(db, binding)
+        )
+        if not conversations:
+            return PluginExecutionResult(
+                ok=True,
+                status="skipped",
+                message="所有目标群都已改为群级定时推送。",
+                output={"reason": "group_schedule_overrides", "target_count": 0},
+            )
+        pushed_today = _group_pushed_conversation_ids(db, binding, conversations, today)
+        conversations = [item for item in conversations if int(item.id) not in pushed_today]
+        if not conversations:
+            return PluginExecutionResult(
+                ok=True,
+                status="skipped",
+                message="今日新闻所有目标群已经推送。",
+                output={"reason": "already_pushed", "target_count": 0},
+            )
+
+    # 先确定目标再抓取，已推送的重复任务不再白跑外部接口。
     try:
         digest = _build_daily_digest(config, current=current)
     except Exception as exc:
         return PluginExecutionResult(ok=False, status="error", message=f"每日新闻抓取失败: {exc}")
 
-    conversations = _resolve_target_conversations(db, binding.bot_id)
-    if not conversations:
-        return PluginExecutionResult(
-            ok=False,
-            status="error",
-            message="每日新闻没有可推送的启用群聊。",
-            output={"target_count": 0},
-        )
-
+    state_keys_by_conversation_id = {int(item.id): _group_state_key(item) for item in conversations}
     batch_result = enqueue_outbound_jobs_by_conversation(
         db,
         conversations=conversations,
@@ -109,11 +234,40 @@ def execute_scheduled_action(db: Session, request: PluginExecutionRequest) -> Pl
     job_ids = list(batch_result["job_ids"])
     failed_targets = list(batch_result["failed_targets"])
     pushed_count = int(batch_result["pushed_conversation_count"] or 0)
+    pushed_conversation_ids = [
+        int(item) for item in batch_result.get("pushed_conversation_ids") or []
+    ]
 
-    # 只更新绑定已有普通配置中的业务状态，不把目录默认值或任何敏感配置写回。
-    ordinary_config = _parse_json_object(binding.config_json)
-    ordinary_config["last_push_date"] = today
-    binding.config_json = json.dumps(ordinary_config, ensure_ascii=False, sort_keys=True)
+    if not failed_targets:
+        # 只有真正入队成功的群才记为今日已推；失败任务回滚后不能留下假状态。
+        _mark_groups_pushed(
+            db,
+            binding,
+            [
+                state_keys_by_conversation_id[conversation_id]
+                for conversation_id in pushed_conversation_ids
+                if conversation_id in state_keys_by_conversation_id
+            ],
+            today,
+        )
+        if not targeted_conversation_id and pushed_count:
+            # 只更新绑定已有普通配置中的业务状态，不把目录默认值或任何敏感配置写回。
+            ordinary_config = _parse_json_object(binding.config_json)
+            ordinary_config["last_push_date"] = today
+            binding.config_json = json.dumps(ordinary_config, ensure_ascii=False, sort_keys=True)
+    if not pushed_count:
+        return PluginExecutionResult(
+            ok=not failed_targets,
+            status="error" if failed_targets else "skipped",
+            message="每日新闻没有创建推送任务。",
+            output={
+                "reason": "no_pushed_group",
+                "target_count": len(conversations),
+                "queued_conversation_count": 0,
+                "outbound_job_ids": job_ids,
+                "failed_targets": failed_targets,
+            },
+        )
     summary = f"每日新闻已向 {pushed_count} 个群聊创建推送任务。"
     if failed_targets:
         summary += f" {len(failed_targets)} 个群聊创建失败。"
@@ -203,10 +357,15 @@ def _get_60s_image_base64(config: DailyNewsConfig) -> str | None:
     return base64.b64encode(image_response.body).decode("ascii") if image_response.body else None
 
 
-def _resolve_target_conversations(db: Session, bot_id: int) -> list[Conversation]:
+def _resolve_target_conversations(
+    db: Session,
+    bot_id: int,
+    *,
+    conversation_id: int | None = None,
+) -> list[Conversation]:
     """最新来源只向已启用群聊推送，不再把私聊作为无群时的隐式降级目标。"""
 
-    return db.scalars(
+    statement = (
         select(Conversation)
         .join(Channel, Channel.id == Conversation.channel_id)
         .where(
@@ -215,7 +374,33 @@ def _resolve_target_conversations(db: Session, bot_id: int) -> list[Conversation
             Channel.is_enabled.is_(True),
         )
         .order_by(Conversation.id.asc())
-    ).all()
+    )
+    if conversation_id:
+        statement = statement.where(Conversation.id == conversation_id)
+    return list(db.scalars(statement).all())
+
+
+def _exclude_schedule_override_chatrooms(
+    db: Session,
+    conversations: list[Conversation],
+    excluded_chatroom_ids: set[int],
+) -> list[Conversation]:
+    """全局计划跳过在群详情单独设置过推送时间的群，由群级任务负责。"""
+
+    if not excluded_chatroom_ids:
+        return conversations
+    result: list[Conversation] = []
+    for conversation in conversations:
+        room_id = db.scalar(
+            select(Chatroom.id).where(
+                Chatroom.channel_id == conversation.channel_id,
+                Chatroom.external_id == conversation.external_id,
+            )
+        )
+        if room_id is not None and int(room_id) in excluded_chatroom_ids:
+            continue
+        result.append(conversation)
+    return result
 
 
 def _build_push_payloads(conversation: Conversation, digest: dict[str, str]) -> list[dict[str, str]]:

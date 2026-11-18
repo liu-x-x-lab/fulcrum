@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.tenant_context import require_tenant_id
 from app.core.tenant_db import tenant_session
 from app.core.time import now_shanghai
-from app.models.entities import BotPlugin, Channel, Chatroom, Conversation, Message, PluginStateRecord
+from app.models.entities import BotPlugin, Channel, Chatroom, Conversation, GroupPluginScope, Message, PluginStateRecord
 from app.services.account_identity import account_identity
 from app.services.outbound_batch import enqueue_outbound_job
 from app.services.plugin_runtime.contracts import PluginExecutionContext, PluginExecutionRequest, PluginExecutionResult
@@ -74,6 +74,27 @@ def _enabled(value: object) -> bool:
 
 def _room_key(channel_id: int, external_id: str) -> str:
     return f"room:{channel_id}:{hashlib.sha256(external_id.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _schedule_override_rooms(db: Session, context: PluginExecutionContext) -> dict[int, dict[str, Any]]:
+    """找出在群详情里显式改过定时开关或时间的群，避免全局计划重复发题。"""
+    scopes = db.scalars(
+        select(GroupPluginScope).where(
+            GroupPluginScope.bot_plugin_id == context.binding_id,
+            GroupPluginScope.tenant_id == context.tenant_id,
+            GroupPluginScope.enabled.is_(True),
+            GroupPluginScope.config_override_json.isnot(None),
+        )
+    ).all()
+    result: dict[int, dict[str, Any]] = {}
+    for scope in scopes:
+        try:
+            override = json.loads(str(scope.config_override_json or "").strip() or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(override, dict) and any(key in override for key in ("scheduled_enabled", "send_time")):
+            result[int(scope.chatroom_id)] = override
+    return result
 
 
 def _record(db: Session, context: PluginExecutionContext, key: str, *, lock: bool = False,
@@ -360,41 +381,60 @@ def _execute_scheduled_action(db: Session, request: PluginExecutionRequest) -> P
             or not binding.bot or not binding.bot.is_enabled):
         return _result("skipped")
     today = now_shanghai().astimezone(BEIJING).date().isoformat()
-    # 一天只开一局由下面的 daily_date 游标保证;不依赖调度器传参(声明式 [[schedule]] 不带 date)。
+    # 一天一局由每个群的 room state.daily_date 保证；不同群可以在各自时间独立开局。
     cursor = _lock_binding(db, context)
     store = PluginStateStore(db, context)
-    if cursor.get("daily_date") == today:
-        return _result("already_started")
     targets = []
-    rooms = db.scalars(select(Chatroom).where(Chatroom.bot_id == binding.bot_id, Chatroom.is_active.is_(True),
-                                             Chatroom.management_status == "enabled").order_by(Chatroom.id)).all()
-    for room in rooms:
-        conversation = db.scalar(select(Conversation).where(
-            Conversation.bot_id == binding.bot_id, Conversation.channel_id == room.channel_id,
-            Conversation.external_id == room.external_id, Conversation.chat_type == "group").order_by(Conversation.id))
-        if conversation is None:
-            channel = db.get(Channel, room.channel_id)
-            if not channel or not channel.is_enabled or channel.deleted_at is not None:
-                continue
-            # 已同步的受管群即使还没收到消息，也能参加每天开局。
-            conversation = Conversation(tenant_id=context.tenant_id, bot_id=binding.bot_id, channel_id=channel.id,
-                                        channel_type=channel.channel_type, external_id=room.external_id,
-                                        title=room.name, chat_type="group")
-            db.add(conversation)
-            db.flush()
-        group_context = replace(context, channel_id=conversation.channel_id, conversation_id=conversation.id)
+    if context.conversation_id:
+        # 群级定时任务只服务自己的会话，不扫描或补建其他群的 Conversation。
+        conversation = db.get(Conversation, int(context.conversation_id))
+        if (conversation is None or int(conversation.bot_id) != int(binding.bot_id)
+                or conversation.chat_type != "group"):
+            return _result("skipped")
+        group_context = replace(context, conversation_id=conversation.id)
         resolved = _resolve(db, group_context, request.config)
         if resolved and _enabled(resolved[3].get("scheduled_enabled")):
             targets.append((group_context, resolved))
+    else:
+        # 全局任务跳过已有群级定时覆盖的群，由它们自己的会话级任务负责。
+        override_rooms = _schedule_override_rooms(db, context)
+        rooms = db.scalars(select(Chatroom).where(Chatroom.bot_id == binding.bot_id, Chatroom.is_active.is_(True),
+                                                 Chatroom.management_status == "enabled").order_by(Chatroom.id)).all()
+        for room in rooms:
+            if int(room.id) in override_rooms:
+                continue
+            conversation = db.scalar(select(Conversation).where(
+                Conversation.bot_id == binding.bot_id, Conversation.channel_id == room.channel_id,
+                Conversation.external_id == room.external_id, Conversation.chat_type == "group").order_by(Conversation.id))
+            if conversation is None:
+                channel = db.get(Channel, room.channel_id)
+                if not channel or not channel.is_enabled or channel.deleted_at is not None:
+                    continue
+                # 已同步的受管群即使还没收到消息，也能参加每天开局。
+                conversation = Conversation(tenant_id=context.tenant_id, bot_id=binding.bot_id, channel_id=channel.id,
+                                            channel_type=channel.channel_type, external_id=room.external_id,
+                                            title=room.name, chat_type="group")
+                db.add(conversation)
+                db.flush()
+            group_context = replace(context, channel_id=conversation.channel_id, conversation_id=conversation.id)
+            resolved = _resolve(db, group_context, request.config)
+            if resolved and _enabled(resolved[3].get("scheduled_enabled")):
+                targets.append((group_context, resolved))
     if not targets:
         return _result("skipped")
     position = int(cursor.get("position", 0)) % len(_questions())
+    started = 0
     for group_context, (_, conversation, channel, config) in targets:
         result = _start(db, group_context, conversation, config, cursor, position=position, daily_date=today)
         if not result.ok:
             raise ValueError(result.message)
+        if result.status == "already_started":
+            continue
+        started += 1
         for reply in result.output["replies"]:
             _queue_reply(db, binding, conversation, channel, reply)
-    cursor.update(position=(position + 1) % len(_questions()), daily_date=today)
+    if not started:
+        return _result("already_started")
+    cursor.update(position=(position + 1) % len(_questions()))
     store.put(CODE, "cursor", cursor)
-    return _result("daily_started", f"已为 {len(targets)} 个群创建猜成语发图任务。")
+    return _result("daily_started", f"已为 {started} 个群创建猜成语发图任务。")
