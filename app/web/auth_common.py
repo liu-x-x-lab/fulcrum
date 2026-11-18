@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -15,7 +16,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.settings import settings
-from app.core.time import now_shanghai
+from app.core.time import ensure_shanghai_datetime, now_shanghai
 from app.services.csrf import verify_csrf_token
 from app.services.image_captcha import (
     CAPTCHA_PURPOSE_PLATFORM_LOGIN,
@@ -178,13 +179,25 @@ def platform_session_token(request: Request) -> str | None:
     return request.cookies.get(PLATFORM_SESSION_COOKIE)
 
 
-def _set_session_cookie(response: Response, name: str, value: str, *, path: str) -> None:
+def login_session_expiry(remember_me: bool) -> datetime | None:
+    """记住登录使用固定 30 天期限；未勾选交由认证服务沿用普通会话配置。"""
+
+    return now_shanghai() + timedelta(days=30) if remember_me else None
+
+
+def _cookie_max_age(created: CreatedSession) -> int:
+    """浏览器与数据库共用绝对期限，CSRF 同步持久化，访问不会延长登录。"""
+
+    return max(0, int((ensure_shanghai_datetime(created.expires_at) - now_shanghai()).total_seconds()))
+
+
+def _set_session_cookie(response: Response, name: str, value: str, *, path: str, max_age: int) -> None:
     """设置仅浏览器 HTTP 请求可见的高熵会话令牌。"""
 
     response.set_cookie(
         name,
         value,
-        max_age=settings.auth_cookie_max_age_seconds,
+        max_age=max_age,
         httponly=True,
         secure=settings.should_use_secure_cookie,
         samesite=settings.auth_cookie_samesite,
@@ -192,7 +205,7 @@ def _set_session_cookie(response: Response, name: str, value: str, *, path: str)
     )
 
 
-def _set_csrf_cookie(response: Response, name: str, value: str, *, path: str) -> None:
+def _set_csrf_cookie(response: Response, name: str, value: str, *, path: str, max_age: int) -> None:
     """设置双提交 CSRF Cookie。
 
     CSRF 原始值需要由服务端模板写入隐藏表单字段，因此不设置 HttpOnly；真正的登录
@@ -202,7 +215,7 @@ def _set_csrf_cookie(response: Response, name: str, value: str, *, path: str) ->
     response.set_cookie(
         name,
         value,
-        max_age=settings.auth_cookie_max_age_seconds,
+        max_age=max_age,
         httponly=False,
         secure=settings.should_use_secure_cookie,
         samesite=settings.auth_cookie_samesite,
@@ -213,8 +226,9 @@ def _set_csrf_cookie(response: Response, name: str, value: str, *, path: str) ->
 def set_tenant_auth_cookies(response: Response, created: CreatedSession) -> None:
     """把新租户数据库会话对应的两个原始令牌交给浏览器。"""
 
-    _set_session_cookie(response, TENANT_SESSION_COOKIE, created.raw_token, path=TENANT_COOKIE_PATH)
-    _set_csrf_cookie(response, TENANT_CSRF_COOKIE, created.raw_csrf_token, path=TENANT_COOKIE_PATH)
+    max_age = _cookie_max_age(created)
+    _set_session_cookie(response, TENANT_SESSION_COOKIE, created.raw_token, path=TENANT_COOKIE_PATH, max_age=max_age)
+    _set_csrf_cookie(response, TENANT_CSRF_COOKIE, created.raw_csrf_token, path=TENANT_COOKIE_PATH, max_age=max_age)
     # 登录成功后清掉同路径旧 Cookie，避免浏览器继续携带已废弃身份造成排障混淆。
     response.delete_cookie(
         LEGACY_AUTH_COOKIE,
@@ -228,8 +242,9 @@ def set_tenant_auth_cookies(response: Response, created: CreatedSession) -> None
 def set_platform_auth_cookies(response: Response, created: CreatedSession) -> None:
     """设置只会发送给 /platform 路径的平台会话与 CSRF Cookie。"""
 
-    _set_session_cookie(response, PLATFORM_SESSION_COOKIE, created.raw_token, path=PLATFORM_COOKIE_PATH)
-    _set_csrf_cookie(response, PLATFORM_CSRF_COOKIE, created.raw_csrf_token, path=PLATFORM_COOKIE_PATH)
+    max_age = _cookie_max_age(created)
+    _set_session_cookie(response, PLATFORM_SESSION_COOKIE, created.raw_token, path=PLATFORM_COOKIE_PATH, max_age=max_age)
+    _set_csrf_cookie(response, PLATFORM_CSRF_COOKIE, created.raw_csrf_token, path=PLATFORM_COOKIE_PATH, max_age=max_age)
 
 
 def _delete_cookie(response: Response, name: str, *, path: str, httponly: bool) -> None:

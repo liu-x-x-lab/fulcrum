@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.core.db import SessionLocal
-from app.models.saas import TenantUser
+from app.models.saas import TenantSession, TenantUser
 from app.services.saas_auth import (
     create_tenant_session,
     hash_password,
@@ -132,6 +132,8 @@ async def tenant_password_action(
 
         # 密码变化属于高风险身份事件：全部旧会话都应立即吊销，再用递增后的认证版本
         # 为当前浏览器创建新会话，确保其他设备不能继续使用旧令牌。
+        # 改密轮换令牌但保留当前会话的剩余期限，首次改密也不会丢失记住登录。
+        expires_at = db.get(TenantSession, principal.session_id).expires_at
         revoke_tenant_sessions(db, user.id, reason="password_changed")
         user.password_hash = hash_password(new_password)
         user.auth_version += 1
@@ -141,6 +143,7 @@ async def tenant_password_action(
         created = create_tenant_session(
             db,
             user,
+            expires_at=expires_at,
             ip_address=request_ip_address(request),
             user_agent=request_user_agent(request),
         )

@@ -3762,6 +3762,15 @@ code {
   border-radius: var(--radius-md);
 }
 
+/* 登录记住选项复用共享复选框，移除文本输入框的内边距并保留触控高度。 */
+.auth-form-grid label.checkbox-field {
+  min-height: 44px;
+}
+
+.auth-form-grid .checkbox-field input[type="checkbox"] {
+  padding: 0;
+}
+
 .auth-submit {
   width: 100%;
   gap: 12px;

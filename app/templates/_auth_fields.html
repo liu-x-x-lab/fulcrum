@@ -25,3 +25,8 @@
   <small id="{{ id }}-hint" class="access-captcha-hint">请输入图片中的 5 位数字</small>
 </div>
 {% endmacro %}
+
+{# 只提交会话期限选择，不在浏览器脚本或本地存储中保存账号密码。 #}
+{% macro remember_me_field(checked=false) %}
+<label class="checkbox-field"><input type="checkbox" name="remember_me" value="true"{% if checked %} checked{% endif %} /><span>记住我</span></label>
+{% endmacro %}
