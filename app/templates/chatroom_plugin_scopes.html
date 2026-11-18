@@ -72,7 +72,7 @@
           <td><span class="chip {{ 'chip-success' if item.enabled else 'chip-muted' }}">{{ '已启用' if item.enabled else '已禁用' }}</span><div class="muted-text">{{ '单独设置' if item.source == 'overridden' else '继承默认' }}</div></td>
           <td><span class="chip {{ 'chip-success' if item.group_running else 'chip-muted' }}">{{ item.group_label }}</span>{% if not item.group_running %}<div class="muted-text">本群当前不运行插件</div>{% endif %}</td>
           <td><span class="chip {{ 'chip-success' if item.binding_enabled else 'chip-muted' }}">{{ '已开启' if item.binding_enabled else '已关闭' }}</span>{% if not item.binding_enabled %}<div class="muted-text">群设置保留，插件暂不运行</div>{% endif %}</td>
-          <td><a class="btn btn-small btn-secondary btn-icon" href="/channels/{{ item.channel_id }}/chatrooms/{{ item.id }}?tab=plugins" title="详情" aria-label="详情"><span class="i i-chevron-right" aria-hidden="true"></span></a></td>
+          <td><a class="btn btn-small btn-secondary btn-icon" href="/channels/{{ item.channel_id }}/chatrooms/{{ item.id }}?tab=plugins&return_to={{ current_list_url|urlencode }}" title="详情" aria-label="详情"><span class="i i-chevron-right" aria-hidden="true"></span></a></td>
         </tr>
       {% endfor %}
       </tbody>

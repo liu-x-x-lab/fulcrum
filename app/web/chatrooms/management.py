@@ -28,6 +28,7 @@ from app.services.workwechat_cloud_poll import is_cloud_poll_enabled, notify_clo
 from app.web.auth_common import require_tenant_csrf
 from app.web.channels.definitions import GROUP_SCOPE_CHANNEL_TYPES
 from app.web.shared.access import enforce_role, get_session
+from app.web.shared.urls import preserve_return_to
 from app.web.shared.operations import (
     _completed_operation_response,
     _csrf_from_header,
@@ -83,7 +84,7 @@ async def sync_chatroom_invitations_action(request: Request, channel_id: int, ch
         record_audit(db, "channel.wechat_webridge.chatroom.invitations.sync", "chatroom", room.id, result["summary"])
         if _operation_json_requested(request):
             return JSONResponse({"ok": True, **result}, headers={"Cache-Control": "no-store"})
-        return RedirectResponse(url=return_url, status_code=303)
+        return RedirectResponse(url=preserve_return_to(request, return_url), status_code=303)
     finally:
         db.close()
 
@@ -276,7 +277,7 @@ async def update_channel_chatroom_management_action(
         # 列表页行内开关带 next 回到列表;只接受站内路径,防止开放重定向。
         target = next if next.startswith("/") and not next.startswith("//") else f"/channels/{channel_id}/chatrooms/{chatroom_id}"
         separator = "&" if "?" in target else "?"
-        return RedirectResponse(url=f"{target}{separator}notice={quote(message)}", status_code=303)
+        return RedirectResponse(url=preserve_return_to(request, f"{target}{separator}notice={quote(message)}"), status_code=303)
     finally:
         db.close()
 

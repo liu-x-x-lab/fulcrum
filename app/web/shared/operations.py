@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.entities import Channel, TaskJob
 from app.services.operation_feedback import build_operation_status
 from app.web.auth_common import require_tenant_csrf
+from app.web.shared.urls import preserve_return_to
 
 
 def _operation_json_requested(request: Request) -> bool:
@@ -34,6 +35,7 @@ async def _require_operation_csrf(db: Session, request: Request) -> None:
 def _completed_operation_response(request: Request, message: str, redirect_url: str, *, ok: bool = True):
     if _operation_json_requested(request):
         return JSONResponse({"ok": ok, "done": True, "summary": message, "successful": int(ok), "failed": int(not ok), "jobs": [], "refresh": ok})
+    redirect_url = preserve_return_to(request, redirect_url)
     separator = "&" if "?" in redirect_url else "?"
     return RedirectResponse(url=f"{redirect_url}{separator}notice={quote(message)}&tone={'success' if ok else 'danger'}", status_code=303)
 
@@ -44,6 +46,7 @@ def _queued_operation_response(request: Request, db: Session, channel: Channel, 
     result["status_url"] = f"/channels/{channel.id}/operations/status?job_ids={job_ids}"
     if _operation_json_requested(request):
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    redirect_url = preserve_return_to(request, redirect_url)
     separator = "&" if "?" in redirect_url else "?"
     return RedirectResponse(url=f"{redirect_url}{separator}operation_jobs={job_ids}&operation_channel={channel.id}", status_code=303)
 

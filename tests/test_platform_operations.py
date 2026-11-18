@@ -31,10 +31,11 @@ def platform_operations_env(tmp_path, monkeypatch):
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True)
     (log_dir / "error.log").write_text(
-        "2026-08-21 ignored error\n2026-08-21 target traceback\n",
+        "2026-08-21 12:00:00.000 | ERROR | app.test:example:1 - ignored error\n"
+        "2026-08-21 12:00:01.000 | ERROR | app.test:example:1 - target traceback\n",
         encoding="utf-8",
     )
-    (log_dir / "app.log").write_text("2026-08-21 application ready\n", encoding="utf-8")
+    (log_dir / "app.log").write_text("2026-08-21 12:00:00.000 | INFO | app.test:example:1 - application ready\n", encoding="utf-8")
 
     monkeypatch.setattr(settings, "log_dir", str(log_dir))
     monkeypatch.setattr(db_module, "SessionLocal", factory)
@@ -147,6 +148,24 @@ def test_platform_operations_pages_require_identity_and_share_secondary_navigati
             for label in ("运行监控", "协议服务", "全局日志"):
                 assert label in operations_navigation
             assert f'class="section-tab active" href="{active_href}"' in operations_navigation
+
+
+def test_log_pagination_keeps_filters_without_counting_entire_file(platform_operations_env) -> None:
+    log_file = platform_operations_env["log_dir"] / "error.log"
+    log_file.write_text("".join(
+        f"2026-11-17 12:00:00.000 | ERROR | app.test:example:1 - pagination-target {number}\n" for number in range(205)
+    ), encoding="utf-8")
+    with TestClient(main_module.app, follow_redirects=False) as client:
+        _set_platform_identity(client, platform_operations_env["session"])
+        response = client.get("/platform/logs", params={"tab": "error", "source_file": "error.log", "keyword": "pagination-target", "level": "ERROR", "page": 2})
+        assert response.status_code == 200
+        pager = response.text.split('aria-label="日志分页"', 1)[1].split("</nav>", 1)[0]
+        assert "当前显示第 101 - 200 条" in pager
+        assert "page=1" in pager and "page=3" in pager
+        for key, value in (("tab", "error"), ("source_file", "error.log"), ("keyword", "pagination-target"), ("level", "ERROR")):
+            assert f'name="{key}" value="{value}"' in pager
+        assert 'name="page"' in pager and "跳转" in pager
+        assert 'max="' not in pager
 
 
 def test_platform_alert_resolution_requires_csrf_and_writes_platform_audit(platform_operations_env) -> None:

@@ -1,8 +1,9 @@
 """站内链接和返回地址处理，集中约束跳转边界。"""
 
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from fastapi import Request
+from starlette.datastructures import URL
 
 
 def build_url(path: str, **params: object) -> str:
@@ -25,13 +26,35 @@ def current_path_with_query(request: Request) -> str:
 
 
 def safe_return_to(value: str | None, fallback: str) -> str:
+    """返回链接只接受站内路径，供主页面和独立路由共同使用。"""
+
     candidate = (value or "").strip()
     if not candidate:
         return fallback
-    parsed = urlsplit(candidate)
+    # 浏览器会把反斜杠当作斜杠，不能让返回链接绕过站内地址校验。
+    if "\\" in candidate or any(ord(char) < 32 for char in candidate):
+        return fallback
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return fallback
     if parsed.scheme or parsed.netloc or not parsed.path.startswith("/") or candidate.startswith("//"):
         return fallback
     return candidate
+
+
+def preserve_return_to(request: Request, target: str) -> str:
+    """详情表单跳转后继续携带来源；只从同源的当前详情页补取返回地址。"""
+
+    return_to = safe_return_to(request.query_params.get("return_to"), "")
+    if not return_to:
+        try:
+            referer = URL(request.headers.get("referer", ""))
+            if (referer.scheme, referer.netloc, referer.path) == (request.url.scheme, request.url.netloc, URL(target).path):
+                return_to = safe_return_to(dict(parse_qsl(referer.query)).get("return_to"), "")
+        except ValueError:
+            pass
+    return str(URL(target).include_query_params(return_to=return_to)) if return_to else target
 
 
 def build_context_href(path: str, return_to: str = "") -> str:

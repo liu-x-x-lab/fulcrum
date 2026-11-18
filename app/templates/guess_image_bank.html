@@ -41,7 +41,9 @@
     <div class="empty-state"><strong>{{ '没有符合条件的题目' if q or category or status else '题库还没有题目' }}</strong><p>{{ '调整筛选条件后再试。' if q or category or status else ('点击上方添加题目，或导入已有题包。' if can_edit else '管理员添加题目后会显示在这里。') }}</p></div>
     {% endfor %}
   </div>
-  {% if pages > 1 %}<nav class="list-pagination" aria-label="题库分页"><span class="list-pagination-summary">第 {{ page }} / {{ pages }} 页</span><div class="list-pagination-actions">{% if page > 1 %}<a class="btn btn-secondary btn-icon" href="{{ base }}?{{ page_query }}&page={{ page - 1 }}" title="上一页" aria-label="上一页"><span class="i i-arrow-left" aria-hidden="true"></span></a>{% endif %}{% if page < pages %}<a class="btn btn-secondary btn-icon" href="{{ base }}?{{ page_query }}&page={{ page + 1 }}" title="下一页" aria-label="下一页"><span class="i i-arrow-right" aria-hidden="true"></span></a>{% endif %}</div></nav>{% endif %}
+  {% set paging = {'page': page, 'total_pages': pages, 'total': total, 'has_prev': page > 1, 'has_next': page < pages} %}
+  {% set pager_label = '题库分页' %}
+  {% include '_pager.html' %}
 </section>
 
 {% if can_edit %}

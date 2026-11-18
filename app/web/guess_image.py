@@ -104,8 +104,7 @@ async def bank_page(request: Request, q: str = "", category: str = "", status: s
         counts = dict(db.execute(select(GuessImageQuestion.status, func.count()).group_by(GuessImageQuestion.status)).all())
         return templates.TemplateResponse(request=request, name="guess_image_bank.html", context=_context(request,
             rows=rows, categories=categories, counts=counts, total=total, page=page, pages=pages,
-            q=q, category=category, status=status, tags=lambda row: " · ".join(json.loads(row.tags_json)),
-            page_query=f"q={quote(q)}&category={quote(category)}&status={quote(status)}"))
+            q=q, category=category, status=status, tags=lambda row: " · ".join(json.loads(row.tags_json))))
 
 
 @router.get("/questions/{identifier}")

@@ -49,13 +49,12 @@
     </details>
     {% else %}<div class="empty-state"><strong>当前筛选下没有日志记录</strong></div>{% endfor %}
   </div>
-  <div class="list-pagination">
-    <div class="list-pagination-summary">当前显示第 {{ pagination.from_index }} - {{ pagination.to_index }} 条</div>
-    <div class="list-pagination-actions">
-      {% set prefix = '/platform/logs' ~ ('?' ~ pagination.query ~ '&' if pagination.query else '?') %}
-      {% if pagination.has_prev %}<a class="btn btn-secondary" href="{{ prefix }}page={{ pagination.prev_page }}">更新记录</a>{% else %}<span class="btn btn-secondary is-disabled" aria-disabled="true">已是最新</span>{% endif %}
-      {% if pagination.has_next %}<a class="btn btn-secondary" href="{{ prefix }}page={{ pagination.next_page }}">更早记录</a>{% else %}<span class="btn btn-secondary is-disabled" aria-disabled="true">没有更早</span>{% endif %}
-    </div>
-  </div>
+  {# 日志按需读取，不为跳页统计整个文件。 #}
+  {% set paging = {'page': pagination.page, 'total_pages': none, 'has_prev': pagination.has_prev, 'has_next': pagination.has_next} %}
+  {% set pager_label = '日志分页' %}
+  {% set pager_prev_label = '上一页（更新）' %}
+  {% set pager_next_label = '下一页（更早）' %}
+  {% set pager_summary = '当前显示第 ' ~ pagination.from_index ~ ' - ' ~ pagination.to_index ~ ' 条' %}
+  {% include '_pager.html' %}
 </section>
 {% endblock %}

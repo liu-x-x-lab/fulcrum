@@ -36,6 +36,7 @@ from app.web.auth_common import require_tenant_csrf
 from app.web.channels.definitions import GROUP_SCOPE_CHANNEL_TYPES
 from app.web.shared.access import enforce_role, get_session
 from app.web.shared.operations import _csrf_from_header
+from app.web.shared.urls import preserve_return_to
 
 
 router = APIRouter()
@@ -133,7 +134,7 @@ async def save_chatroom_plugin_settings_action(request: Request, channel_id: int
         record_audit(db, 'channel.chatroom-plugin.settings', 'group_plugin_scope', bot_plugin_id, f'chatroom={room.id}, operator={user.user_id}')
         if request.headers.get('X-Requested-With') == 'fetch':
             return JSONResponse(jsonable_encoder({'ok':True, 'notice':'本群插件设置已保存', 'settings':group_plugin_settings_view(db, channel, room, binding)}))
-        return RedirectResponse(url=f'/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote("本群插件设置已保存")}', status_code=303)
+        return RedirectResponse(url=preserve_return_to(request, f'/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote("本群插件设置已保存")}'), status_code=303)
     finally:
         db.close()
 
@@ -157,7 +158,7 @@ async def reset_chatroom_plugin_settings_action(request: Request, channel_id: in
         record_audit(db, 'channel.chatroom-plugin.settings.reset', 'group_plugin_scope', bot_plugin_id, f'chatroom={room.id}, operator={user.user_id}')
         if request.headers.get('X-Requested-With') == 'fetch':
             return JSONResponse(jsonable_encoder({'ok':True, 'notice':'配置已恢复默认，本群启停保持不变', 'settings':group_plugin_settings_view(db, channel, room, binding)}))
-        return RedirectResponse(url=f'/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote("配置已恢复默认，本群启停保持不变")}', status_code=303)
+        return RedirectResponse(url=preserve_return_to(request, f'/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote("配置已恢复默认，本群启停保持不变")}'), status_code=303)
     finally:
         db.close()
 
@@ -211,7 +212,7 @@ async def enable_wechat_ipad_chatroom_scope_action(request: Request, channel_id:
         db.commit()
         message = "已将该群的插件草稿作用域设为启用"
         record_audit(db, f"channel.{channel.channel_type}.chatroom-scope.enable", "group_plugin_scope", bot_plugin_id, f"chatroom={chatroom.id}")
-        return RedirectResponse(url=f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}", status_code=303)
+        return RedirectResponse(url=preserve_return_to(request, f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}"), status_code=303)
     finally:
         db.close()
 
@@ -265,7 +266,7 @@ async def disable_wechat_ipad_chatroom_scope_action(request: Request, channel_id
         db.commit()
         message = "已将该群的插件草稿作用域设为停用"
         record_audit(db, f"channel.{channel.channel_type}.chatroom-scope.disable", "group_plugin_scope", bot_plugin_id, f"chatroom={chatroom.id}")
-        return RedirectResponse(url=f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}", status_code=303)
+        return RedirectResponse(url=preserve_return_to(request, f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}"), status_code=303)
     finally:
         db.close()
 
@@ -316,7 +317,7 @@ async def reset_wechat_ipad_chatroom_scope_action(request: Request, channel_id: 
         db.commit()
         message = "已恢复继承 bot_plugin 绑定状态"
         record_audit(db, f"channel.{channel.channel_type}.chatroom-scope.reset", "group_plugin_scope", bot_plugin_id, f"chatroom={chatroom.id}")
-        return RedirectResponse(url=f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}", status_code=303)
+        return RedirectResponse(url=preserve_return_to(request, f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}"), status_code=303)
     finally:
         db.close()
 
@@ -444,12 +445,12 @@ async def set_wechat_ipad_chatroom_scope_mode_action(
         if request.headers.get("X-Requested-With") == "fetch":
             # custom:这个群是否单独设置过(启用/停用都算自定义,恢复默认才回到继承),页面据此显示"本群已自定义"和"恢复默认"。
             return JSONResponse({"ok": True, "notice": message, "mode": normalized_mode, "custom": normalized_mode != "inherited"})
-        return RedirectResponse(url=f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}", status_code=303)
+        return RedirectResponse(url=preserve_return_to(request, f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote(message)}"), status_code=303)
     except ValueError as exc:
         db.rollback()
         # 服务层会在绑定和群不匹配等数据异常时抛 ValueError；这里转成页面提示，避免按钮操作直接落到 500 错误页。
         if request.headers.get("X-Requested-With") == "fetch":
             return JSONResponse({"ok": False, "notice": f"群权限保存失败：{exc}"}, status_code=400)
-        return RedirectResponse(url=f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote('群权限保存失败：' + str(exc))}", status_code=303)
+        return RedirectResponse(url=preserve_return_to(request, f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab=plugins&notice={quote('群权限保存失败：' + str(exc))}"), status_code=303)
     finally:
         db.close()

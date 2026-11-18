@@ -50,6 +50,7 @@ from app.web.plugins.routes import _current_tenant_id
 from app.web.shared.access import enforce_role, get_session, require_user
 from app.web.shared.operations import _csrf_from_header
 from app.web.shared.presentation import render
+from app.web.shared.urls import build_url, safe_return_to
 
 
 router = APIRouter()
@@ -104,6 +105,7 @@ async def channel_chatroom_detail_page(request: Request, channel_id: int, chatro
             channel=channel,
             chatroom=chatroom,
             detail=detail,
+            back_href=safe_return_to(request.query_params.get("return_to"), f"/chatrooms?channel_id={channel.id}"),
             # 群详情分为 功能/插件/成员/消息/资料 五个标签，非法值回落到功能。
             tab=tab if tab in ("features", "plugins", "members", "profile") else "features",
             # 没单独保存过设置的能力跟随默认值:AI 对话跟随租户「AI 助手」里的聊天开关。
@@ -344,7 +346,7 @@ async def contact_directory_page(request: Request, q: str = "", channel_id: int 
 
 
 @router.post("/contacts/{contact_id}/chat")
-async def start_contact_chat(request: Request, contact_id: int, csrf_token: str = Form("")):
+async def start_contact_chat(request: Request, contact_id: int, csrf_token: str = Form(""), return_to: str = Form("")):
     """从好友列表发起私聊:已有会话直接复用,没有就建一条再进消息中心。"""
 
     enforce_role(request, "ops")
@@ -401,6 +403,6 @@ async def start_contact_chat(request: Request, contact_id: int, csrf_token: str 
             db.flush()
             record_audit(db, "contact.start-chat", "conversation", conversation.id, f"channel={channel.id} contact={contact.id}")
             db.commit()
-        return RedirectResponse(url=f"/messages?conversation_id={conversation.id}&channel_id={channel.id}", status_code=303)
+        return RedirectResponse(url=build_url("/messages", conversation_id=conversation.id, channel_id=channel.id, return_to=safe_return_to(return_to, "")), status_code=303)
     finally:
         db.close()

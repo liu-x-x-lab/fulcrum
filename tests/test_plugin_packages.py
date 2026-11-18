@@ -129,7 +129,7 @@ BAD_PACKAGES = {
     "下划线开头的编码": (_zip({"config.toml": _manifest("_shared"), "plugin.py": "x=1"}), "plugin.code"),
     "缺少入口": (_zip({"config.toml": _manifest()}), "入口"),
     "清单无效": (_zip({"config.toml": _manifest() + '\n[[config.fields]]\nkey = "a"\nlabel = "x"\nkind = "color"\n', "plugin.py": "x=1"}), "清单无效"),
-    "语法错误": (_zip({"config.toml": _manifest(), "plugin.py": "def broken(:\n"}), "语法错误"),
+    "语法错误": (_zip({"config.toml": _manifest(), "plugin.py": "def broken(:\n"}), "无法解析 Python"),
     "TOML 损坏": (_zip({"config.toml": "[plugin\ncode =", "plugin.py": "x=1"}), "解析失败"),
 }
 
