@@ -76,6 +76,7 @@ class PluginMatcher:
     commands: tuple[str, ...] = ()
     keywords: tuple[str, ...] = ()
     require_mention: bool = False
+    additional_command_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -997,12 +998,21 @@ def _build_dispatch_context(channel: Channel, normalized_event: dict[str, Any]) 
 
 def _resolve_effective_matcher(binding: BotPlugin, discovered: DiscoveredPlugin, scope_config_json: str | None = None) -> PluginMatcher:
     config = _deep_merge_config(_parse_config_json(binding.config_json), _parse_config_json(scope_config_json))
-    commands = _normalize_text_tuple(config.get("commands")) or discovered.matcher.commands
+    commands = effective_plugin_commands(discovered, config)
     commands = command_triggers(commands, config)
     # 明确保存的空列表表示清空关键词，不能再用默认关键词隐式补回。
     keywords = _normalize_text_tuple(config["keywords"]) if "keywords" in config else discovered.matcher.keywords
     require_mention = bool(config.get("require_mention", discovered.matcher.require_mention))
     return PluginMatcher(commands=commands, keywords=keywords, require_mention=require_mention)
+
+
+def effective_plugin_commands(discovered: DiscoveredPlugin, config: Mapping[str, Any]) -> tuple[str, ...]:
+    """绑定可单独配置附加命令组；群设置与实际分发必须看到相同的触发词。"""
+
+    commands = _normalize_text_tuple(config.get("commands")) or discovered.matcher.commands
+    for key in discovered.matcher.additional_command_fields:
+        commands += _normalize_text_tuple(config.get(key, discovered.runtime_config.get(key)))
+    return tuple(dict.fromkeys(commands))
 
 
 def _canonical_command_context(context: DirectoryPluginContext) -> DirectoryPluginContext:
@@ -2328,6 +2338,7 @@ def _build_matcher(parsed: dict[str, Any]) -> PluginMatcher:
     matcher_block = parsed.get("matcher", {})
     return PluginMatcher(
         commands=_normalize_text_tuple(matcher_block.get("commands")),
+        additional_command_fields=_normalize_text_tuple(matcher_block.get("additional_command_fields")),
         keywords=_normalize_text_tuple(matcher_block.get("keywords")),
         require_mention=bool(matcher_block.get("require_mention", False)),
     )

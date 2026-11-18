@@ -140,6 +140,9 @@ Reloading must not send messages, charge points or create business records.
 `request` contains `action`, merged `config`, business `payload` and trusted
 `PluginExecutionContext`. Common payload keys include `command_name`,
 `command_args`, `content`, `matched_keyword` and `conversation_external_id`.
+Plugins with separately configured command groups may list their runtime keys
+in `[matcher].additional_command_fields`. The dispatcher and group settings
+combine these lists with `commands` before applying group aliases.
 Authority comes from context, never payload. Custom matchers instead receive
 `DirectoryPluginContext`, including message properties and `binding_config`;
 read its actual definition before using fields.

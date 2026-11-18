@@ -61,8 +61,9 @@ def _base_config(binding: BotPlugin) -> dict[str, Any]:
 
 
 def _commands(discovered, base: Mapping[str, Any]) -> tuple[str, ...]:
-    raw = base.get('commands')
-    return tuple(str(item) for item in raw if isinstance(item, str) and item.strip()) if isinstance(raw, list) and raw else discovered.matcher.commands
+    from app.services.plugin_directory import effective_plugin_commands
+
+    return effective_plugin_commands(discovered, base)
 
 
 def _scope(db: Session, channel: Channel, room: Chatroom, binding_id: int) -> GroupPluginScope | None:

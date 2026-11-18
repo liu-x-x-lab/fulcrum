@@ -100,7 +100,7 @@ def _matches_content(db: Session, message: Message, params: dict, payload: dict,
         mention_ids = params.get("mention_user_list") or []
         names = _mention_names(db, message, mention_ids) if mention_ids else {}
         if params.get("quote_message_id"):
-            root = _xml(content)
+            root = _xml(str(details.get("content_xml") or content))
             if kind != "quote" or root is None:
                 return False
             quoted_id = str(details.get("quote_message_id") or root.findtext(".//refermsg/svrid") or "")
