@@ -18,7 +18,7 @@ from app.models.entities import Bot, Channel, Chatroom, ChatroomMember, Conversa
 from app.services import payment_ledger
 from app.services.chatroom_profile import save_webridge_group_notice
 from app.services.identity_directory import looks_like_raw_id
-from app.services.plugin_scopes import cancel_disallowed_plugin_outbound_job
+from app.services.plugin_scopes import cancel_disallowed_plugin_outbound_job, maibot_previous_part_pending
 from app.services.task_queue import complete_job, enqueue_job, fail_job_terminal, parse_job_payload
 from app.core.logging import get_logger
 
@@ -846,10 +846,14 @@ def claim_commands(db: Session, channel: Channel, payload: dict[str, Any], limit
         data = parse_job_payload(job)
         if int(data.get("channel_id") or 0) != int(channel.id):
             continue
+        if cancel_disallowed_plugin_outbound_job(db, channel=channel, job=job, payload=data):
+            if data.get("plugin_code") == "maibot_adapter":
+                settle_outbound_message(db, job, ok=False, error=job.error_message)
+            continue
+        if maibot_previous_part_pending(db, job, data):
+            continue
         # 待确认账号只允许读取基础资料，业务命令需在用户确认后才下发。
         if channel.is_enabled is False and text(as_object(data.get("command")).get("type")) not in {"account_status", "device_status"}:
-            continue
-        if cancel_disallowed_plugin_outbound_job(db, channel=channel, job=job, payload=data):
             continue
         # 排队期间也可能跨过两分钟，过期撤回不再发给手机执行。
         if data.get("revoke_message_id") and int(data.get("revoke_expires_at") or 0) <= int(current.timestamp() * 1000):

@@ -79,6 +79,7 @@ from app.web.dashboard import router as dashboard_router
 from app.web.messages.moments import router as messages_moments_router
 from app.web.messages.routes import router as messages_routes_router
 from app.web.plugins.routes import router as plugins_routes_router
+from app.web.plugins.maibot_connections import router as maibot_connections_router
 from app.web.points import router as points_router
 from app.web.setup import router as setup_router
 from app.web.shared.access import get_platform_session
@@ -349,6 +350,7 @@ app.include_router(chatrooms_directory_router)
 app.include_router(chatrooms_management_router)
 app.include_router(chatrooms_plugin_settings_router)
 app.include_router(plugins_routes_router)
+app.include_router(maibot_connections_router)
 app.include_router(messages_routes_router)
 app.include_router(messages_moments_router)
 app.include_router(dashboard_router)

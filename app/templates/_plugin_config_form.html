@@ -1,6 +1,8 @@
 {# 插件配置表单:字段来自清单 v2 的 [[config.fields]] 声明(中文标签、说明、范围、分组、下拉选项);
    没有声明的插件按默认值推断。保存由 plugin_schemas.merge_schema_config 处理,字段名统一是 schema__<key>。 #}
-{% if config_view.mode == 'schema' %}
+{% if config_view.plugin_code == 'maibot_adapter' %}
+<div class="full-row"><p class="muted-text">MaiBot 使用多连接配置。{% if config_view.management_url %}<a href="{{ config_view.management_url }}">管理连接与聊天范围</a>{% else %}绑定机器人后，可添加连接并搜索选择群聊或私聊。{% endif %}</p></div>
+{% elif config_view.mode == 'schema' %}
 {% for field in config_view.fields %}
 {# 分组必须包含自己的字段，不能只插入标题后继续混排；保持声明顺序，不改保存字段或筛选敏感项的路径。 #}
 {% if loop.first or field.group != loop.previtem.group %}

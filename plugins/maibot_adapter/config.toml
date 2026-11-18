@@ -2,9 +2,9 @@
 code = "maibot_adapter"
 display_name = "MaiBot 适配器"
 plugin_type = "observer"
-version = "3.0.0"
+version = "3.2.0"
 author = "abot"
-description = "把租户消息旁路发送到自己的 MaiBot，并按开关接收文本回复。"
+description = "一个插件连接多个 MaiBot，为每条连接搜索选择群聊或私聊，独立启停和重连，兼容旧版连接。"
 default_enabled = false
 
 [capability]
@@ -22,9 +22,10 @@ require_mention = false
 
 [secrets]
 # MaiBot API Key 只属于当前租户绑定，不进入目录配置或共享连接。
-fields = ["api_key"]
+fields = ["api_key", "connection_tokens"]
 
 [runtime]
+protocol = "maim"
 enabled = false
 collect_group_messages = true
 collect_private_messages = true
@@ -33,6 +34,7 @@ reply_group_messages = true
 reply_private_messages = true
 api_server_ws_url = ""
 api_key = ""
+connection_tokens = ""
 platform_name = "multi-bot-saas"
 verify_ssl = true
 connect_timeout_seconds = 15
@@ -41,3 +43,18 @@ heartbeat_interval_seconds = 20
 reconnect_delay_seconds = 5
 queue_maxsize = 200
 max_send_retries = 2
+# 断线等待超过此秒数的消息直接丢弃，避免重连后补发旧聊天。
+max_message_age_seconds = 120
+
+# 实际编辑使用专用多连接页面；声明敏感字段供所有通用页面脱敏及群覆盖隔离。
+[[config.fields]]
+key = "api_key"
+label = "旧版连接令牌"
+kind = "secret"
+hint = "旧配置保存后自动迁入默认连接，加密保存且不回显。"
+
+[[config.fields]]
+key = "connection_tokens"
+label = "连接令牌"
+kind = "secret"
+hint = "各连接独立保存在租户绑定密文中，请使用专用连接管理页面。"

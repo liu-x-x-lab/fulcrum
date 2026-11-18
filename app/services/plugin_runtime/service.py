@@ -190,6 +190,10 @@ def _group_config_override(db: Session, binding: BotPlugin, context: PluginExecu
     ))
     config = _parse_config_json(scope.config_override_json) if scope else {}
     code = binding.plugin.code if binding.plugin else None
+    if code == "maibot_adapter":
+        config.pop("connections", None)
+        config.pop("maibot_connections_version", None)
+        config.pop("maibot_reply_generation", None)
     definition = get_plugin_runtime_definition(code)
     discovered = get_discovered_plugin(code)
     sensitive = set(discovered.secret_fields) if discovered else set()

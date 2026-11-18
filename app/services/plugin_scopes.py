@@ -34,6 +34,8 @@ def plugin_group_conversation_enabled(db: Session, *, channel: Channel, conversa
     if binding is None or binding.status != "enabled":
         return False
     chatroom = db.scalar(select(Chatroom).where(Chatroom.channel_id == channel.id, Chatroom.external_id == conversation.external_id))
+    if plugin_code == "maibot_adapter" and chatroom is not None and (chatroom.status == "left" or not chatroom.is_active or chatroom.management_status != "enabled"):
+        return False
     scope = None
     if chatroom is not None:
         scope = db.scalar(select(GroupPluginScope).where(
@@ -59,6 +61,7 @@ def cancel_disallowed_plugin_outbound_job(db: Session, *, channel: Channel, job:
         and conversation.channel_id == channel.id and conversation.bot_id == channel.bot_id
         and not (binding is not None and binding.status == "unbound")
         and plugin_group_conversation_enabled(db, channel=channel, conversation=conversation, plugin_code=plugin_code)
+        and (plugin_code != "maibot_adapter" or (channel.is_enabled and channel.deleted_at is None and _maibot_outbound_allowed(binding, conversation, payload)))
     ):
         return False
     # 关闭权限后旧任务不能留在 pending，避免重新启用时又发出过期消息。
@@ -66,3 +69,35 @@ def cancel_disallowed_plugin_outbound_job(db: Session, *, channel: Channel, job:
     job.finished_at = now_shanghai()
     job.error_message = "插件消息已无有效会话或授权，取消待发送消息"
     return True
+
+
+def _maibot_outbound_allowed(binding, conversation, payload) -> bool:
+    from app.services.maibot_config import maibot_outbound_allowed
+
+    return maibot_outbound_allowed(binding, conversation, payload)
+
+
+def maibot_previous_part_pending(db: Session, job: TaskJob, payload: dict) -> bool:
+    """Do not let a later part overtake an earlier one via another phone transport."""
+    from app.services.task_queue import OUTBOUND_DISPATCH_JOB, parse_job_payload
+
+    previous_id = payload.get("maibot_previous_dispatch_id")
+    if payload.get("plugin_code") != "maibot_adapter" or type(previous_id) is not int:
+        return False
+    previous = db.get(TaskJob, previous_id)
+    if previous is None or previous.tenant_id != job.tenant_id or previous.job_type != OUTBOUND_DISPATCH_JOB:
+        return False
+    previous_payload = parse_job_payload(previous)
+    if any(previous_payload.get(key) != payload.get(key) for key in (
+        "plugin_code", "channel_id", "conversation_id", "maibot_binding_id", "maibot_connection_id", "maibot_connection_revision",
+    )):
+        return False
+    if previous.status in {"pending", "running"}:
+        return True
+    from app.services.maibot_config import parse_config
+
+    result = parse_config(previous.result_json)
+    command_id = (result.get("adapter_result") or {}).get("job_id")
+    command = db.get(TaskJob, command_id) if type(command_id) is int else None
+    return bool(command is not None and command.tenant_id == job.tenant_id and command.job_type == job.job_type
+                and command.status in {"pending", "running"})

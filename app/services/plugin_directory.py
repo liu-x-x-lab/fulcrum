@@ -1851,6 +1851,10 @@ def _build_directory_context(
     default_config = dict(discovered.runtime_config) if discovered else {}
     binding_config = _parse_config_json(binding.config_json)
     scope_config = _parse_config_json(candidate.scope_config_override_json)
+    if candidate.plugin_code == "maibot_adapter":
+        scope_config.pop("connections", None)
+        scope_config.pop("maibot_connections_version", None)
+        scope_config.pop("maibot_reply_generation", None)
     secret_fields = set(discovered.secret_fields) if discovered else set()
     # 群作用域和历史普通 JSON 都不能覆盖绑定密文。敏感字段先从非密文配置中删除，
     # 再把当前租户绑定的解密结果放到最终配置末尾。

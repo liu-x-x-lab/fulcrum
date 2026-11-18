@@ -30,6 +30,7 @@ from app.services.self_sent import is_self_sent
 from app.services.plugin_runtime.scheduler import process_plugin_scheduled_action_job, schedule_due_plugin_actions
 from app.services.task_queue import (
     INBOUND_MEDIA_FETCH_JOB,
+    MAIBOT_MEDIA_FORWARD_JOB,
     OPEN_WEBHOOK_DELIVERY_JOB,
     OUTBOUND_DISPATCH_JOB,
     AI_INTENT_JOB,
@@ -59,6 +60,7 @@ def start_background_workers() -> None:
     if _worker_thread and _worker_thread.is_alive():
         return
     _recover_running_jobs_for_all_tenants()
+    _restore_maibot_bindings()
     _stop_event.clear()
     from app.services.plugin_auto_revoke import start_auto_revoke_worker
 
@@ -155,10 +157,29 @@ def _recover_running_jobs_for_all_tenants() -> int:
                     PLUGIN_SCHEDULED_ACTION_JOB,
                     OUTBOUND_DISPATCH_JOB,
                     INBOUND_MEDIA_FETCH_JOB,
+                    MAIBOT_MEDIA_FORWARD_JOB,
                     OPEN_WEBHOOK_DELIVERY_JOB,
                 ),
             )
     return recovered_count
+
+
+def _restore_maibot_bindings() -> None:
+    from app.services.maibot_lifecycle import start_maibot_binding
+    from app.services.plugin_governance import blocked_plugin_codes
+
+    for tenant_id in _list_tenant_ids():
+        try:
+            with tenant_scope(tenant_id), tenant_session(TenantSessionLocal) as db:
+                if "maibot_adapter" in blocked_plugin_codes(db, tenant_id):
+                    continue
+                bindings = db.scalars(select(BotPlugin).join(BotPlugin.plugin).where(
+                    BotPlugin.tenant_id == tenant_id, BotPlugin.status == "enabled", Plugin.code == "maibot_adapter",
+                )).all()
+                for binding in bindings:
+                    start_maibot_binding(binding)
+        except Exception:
+            logger.warning("unable to restore tenant MaiBot bindings", extra={"tenant_id": tenant_id})
 
 
 def _run_single_job() -> bool:
@@ -172,6 +193,7 @@ def _run_single_job() -> bool:
                 PLUGIN_SCHEDULED_ACTION_JOB,
                 OUTBOUND_DISPATCH_JOB,
                 INBOUND_MEDIA_FETCH_JOB,
+                MAIBOT_MEDIA_FORWARD_JOB,
                 OPEN_WEBHOOK_DELIVERY_JOB,
             ),
         )
@@ -201,6 +223,12 @@ def _run_single_job() -> bool:
                 result = _process_outbound_dispatch_job(db, job, payload)
             elif job.job_type == INBOUND_MEDIA_FETCH_JOB:
                 result = _process_inbound_media_fetch_job(db, payload)
+            elif job.job_type == MAIBOT_MEDIA_FORWARD_JOB:
+                from app.services.maibot_wechat import process_media_forward
+
+                result = process_media_forward(db, job, payload)
+                if result is None:
+                    return True
             elif job.job_type == OPEN_WEBHOOK_DELIVERY_JOB:
                 result = process_open_webhook_delivery_job(db, payload)
             else:
@@ -396,6 +424,11 @@ def _process_outbound_dispatch_job(db: Session, job: TaskJob, payload: dict[str,
             db, channel=channel, conversation=conversation, plugin_code=plugin_code,
         ):
             return {"skipped": True, "reason": "plugin_scope_disabled"}
+        if plugin_code == "maibot_adapter":
+            from app.services.maibot_config import maibot_outbound_allowed
+
+            if not channel.is_enabled or channel.deleted_at is not None or not maibot_outbound_allowed(binding, conversation, payload):
+                return {"skipped": True, "reason": "maibot_assignment_changed"}
         from app.services.message_actions import capabilities
 
         if binding is not None and capabilities(channel, conversation)["revoke"]:
@@ -420,8 +453,12 @@ def _process_outbound_dispatch_job(db: Session, job: TaskJob, payload: dict[str,
             "max_age_seconds": int(OUTBOUND_JOB_MAX_AGE.total_seconds()),
             "age_seconds": age_seconds,
         }
-    message, adapter_result = dispatch_outbound_message(db, channel, conversation, outbound_payload,
-        auto_revoke=auto_revoke)
+    if plugin_code == "maibot_adapter" and channel.channel_type in {"wechat_webridge", "wechat_gugatool"}:
+        device_scope = {key: payload.get(key) for key in ("plugin_code", "maibot_binding_id", "maibot_connection_id", "maibot_connection_revision")}
+        device_scope["maibot_previous_dispatch_id"] = payload.get("maibot_previous_dispatch_id")
+        message, adapter_result = dispatch_outbound_message(db, channel, conversation, outbound_payload, auto_revoke=auto_revoke, maibot_dispatch=device_scope)
+    else:
+        message, adapter_result = dispatch_outbound_message(db, channel, conversation, outbound_payload, auto_revoke=auto_revoke)
     operation_id = int(payload.get("customer_operation_request_id") or 0)
     if operation_id:
         from app.services.customer_operations import mark_customer_operation_dispatched

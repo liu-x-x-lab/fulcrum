@@ -26,7 +26,7 @@
     // 只有页面或触发按钮的祖先滚动才会改变菜单位置，此时需要关闭。
     // 长 URL 输入框失焦可能触发自身的横向回滚，不能误关刚打开的来源菜单；
     // 选项列表自身和其他控件的滚动同样不影响触发按钮，保持正常展开。
-    if (openInstance && event.target instanceof Node && event.target.contains(openInstance.root)) closeOpen();
+    if (openInstance && event.target instanceof Node && event.target.contains(openInstance.root)) openInstance.closeIfMoved();
   }, true);
 
   class UiSelect {
@@ -127,6 +127,7 @@
       this.button.setAttribute("aria-expanded", "true");
       openInstance = this;
       this.positionPanel();
+      this.anchorRect = this.button.getBoundingClientRect();
       const selectedItem = this.panel.querySelector(".is-selected") || this.panel.querySelector(".ui-select-option:not(.is-disabled)");
       this.setActive(selectedItem);
     }
@@ -150,6 +151,13 @@
       this.root.classList.remove(OPEN_CLASS, "ui-select-up");
       this.button.setAttribute("aria-expanded", "false");
       if (openInstance === this) openInstance = null;
+    }
+
+    closeIfMoved() {
+      // 点击前为按钮定位产生的滚动事件可能延后送达；此时按钮已在打开时的位置，
+      // 不能误关刚展开的菜单。只有锚点实际移动后才关闭。
+      const rect = this.button.getBoundingClientRect();
+      if (!this.anchorRect || ["top", "left", "width", "height"].some((key) => Math.abs(rect[key] - this.anchorRect[key]) > 0.5)) this.close();
     }
 
     setActive(item) {

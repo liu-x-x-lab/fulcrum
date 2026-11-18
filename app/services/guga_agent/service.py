@@ -258,14 +258,14 @@ def claim_commands(
 ) -> list[dict[str, Any]]:
     """按设备会话语义领取待执行命令,并置为 running 防止重复下发。"""
 
+    from app.services.plugin_scopes import cancel_disallowed_plugin_outbound_job, maibot_previous_part_pending
+
     if not identity_matches(channel, payload, require_session=True):
         current = registration(channel)
         if current and text(payload.get("device_id")) == current.get("device_id") and text(payload.get("account_id")) == current.get("account_id"):
             raise GugaAgentError("session_expired", "设备会话已失效,请重新注册", status=410)
         raise GugaAgentError("identity_mismatch", "设备身份与注册快照不一致", status=409)
     reap_stale_commands(db, channel)
-    if not channel.is_enabled:
-        return []
     current_time = now_shanghai()
     jobs = db.scalars(
         select(TaskJob)
@@ -284,6 +284,13 @@ def claim_commands(
     for job in jobs:
         data = parse_job_payload(job)
         if int(data.get("channel_id") or 0) != int(channel.id):
+            continue
+        if cancel_disallowed_plugin_outbound_job(db, channel=channel, job=job, payload=data):
+            _settle_outbound_message(db, job, ok=False, error=job.error_message)
+            continue
+        if not channel.is_enabled:
+            continue
+        if maibot_previous_part_pending(db, job, data):
             continue
         command = as_object(data.get("command"))
         name = text(command.get("command_name"))

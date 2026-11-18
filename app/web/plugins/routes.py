@@ -29,7 +29,7 @@ from app.services.plugin_runtime import (
     get_plugin_runtime_meta,
     get_plugin_runtime_meta_map,
 )
-from app.services.plugin_schemas import build_plugin_config_view, merge_schema_config
+from app.services.plugin_schemas import PluginConfigMergeResult, build_plugin_config_view, merge_schema_config
 from app.services.runtime import compute_binding_runtime, persist_binding_execution, reload_binding
 from app.web.auth_common import require_tenant_csrf
 from app.web.plugins.views import (
@@ -248,11 +248,15 @@ async def bind_plugin_action(
             raise HTTPException(status_code=404, detail="机器人不存在")
         form = await request.form()
         try:
-            merged_config = merge_schema_config(
-                plugin.code,
-                form,
-                fallback_config_json=config_json or None,
-            )
+            if plugin.code == "maibot_adapter":
+                if config_json.strip() or any(key.startswith(("schema__", "schema_clear__")) for key in form):
+                    raise ValueError("请先绑定机器人，再在 MaiBot 专用连接页面保存配置")
+                existing = db.scalar(select(BotPlugin).where(BotPlugin.bot_id == bot_id, BotPlugin.plugin_id == plugin_id))
+                if existing is not None and existing.status != "unbound":
+                    raise ValueError("此机器人已绑定 MaiBot，请在专用连接页面管理配置")
+                merged_config = PluginConfigMergeResult(config_json=existing.config_json if existing else None)
+            else:
+                merged_config = merge_schema_config(plugin.code, form, fallback_config_json=config_json or None)
         except ValueError as exc:
             # 公共发送策略必须在创建绑定之前完整校验，不把无效区间存成半成品。
             return JSONResponse({"ok": False, "notice": str(exc)}, status_code=400)
@@ -390,6 +394,8 @@ async def edit_plugin_binding_action(
             raise HTTPException(status_code=404, detail="Binding not found")
         form = await request.form()
         plugin_code = binding.plugin.code if binding.plugin else None
+        if plugin_code == "maibot_adapter":
+            raise HTTPException(status_code=400, detail="请在 MaiBot 专用连接页面保存配置")
         try:
             merged_config = merge_schema_config(
                 plugin_code,

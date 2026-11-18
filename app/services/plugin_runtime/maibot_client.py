@@ -9,9 +9,11 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Protocol
 
 from websockets.asyncio.client import connect as websocket_connect
+from websockets.exceptions import InvalidStatus
 
 from app.core.logging import get_logger
 
@@ -23,14 +25,16 @@ MAX_RECENT_CONVERSATIONS = 1_000
 RECENT_CONVERSATION_TTL_SECONDS = 24 * 60 * 60
 START_TIMEOUT_SECONDS = 2.0
 SUBMIT_TIMEOUT_SECONDS = 2.0
+SUPPORTED_PROTOCOLS = {"maim", "legacy_api"}
 
 
 @dataclass(frozen=True)
 class MaiBotConnectionKey:
-    """使用租户与插件绑定共同定位一条独立 MaiBot 连接。"""
+    """使用租户、插件绑定和稳定连接编号定位独立 MaiBot 连接。"""
 
     tenant_id: int
     binding_id: int
+    connection_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -47,17 +51,50 @@ class MaiBotConnectionConfig:
     reconnect_delay_seconds: int = 5
     queue_maxsize: int = 200
     max_send_retries: int = 2
+    protocol: str = "maim"
+    max_message_age_seconds: int = 120
+    generation: str = ""
+
+    def __post_init__(self) -> None:
+        if self.protocol not in SUPPORTED_PROTOCOLS:
+            raise ValueError("unsupported_maibot_protocol")
 
 
-MaiBotReplyHandler = Callable[[MaiBotConnectionKey, int, Mapping[str, Any]], None]
+@dataclass(frozen=True)
+class MaiBotReplyOutcome:
+    code: str
+    job_id: int | None = None
+
+
+MaiBotReplyHandler = Callable[[MaiBotConnectionKey, int, Mapping[str, Any]], MaiBotReplyOutcome | None]
+
+
+def maibot_connection_error(error: Exception) -> str:
+    """Return only safe diagnostic codes; exceptions may contain credentials."""
+
+    if isinstance(error, InvalidStatus):
+        status = error.response.status_code
+        if status in {401, 403}:
+            return "auth_rejected"
+        if status == 404:
+            return "path_not_found"
+        return "handshake_rejected"
+    if isinstance(error, ssl.SSLError):
+        return "tls_failure"
+    if isinstance(error, TimeoutError):
+        return "connect_timeout"
+    if isinstance(error, OSError):
+        return "network_failure"
+    return "connection_lost"
 
 
 @dataclass(frozen=True)
 class _QueuedSubmission:
-    """保存待发送 APIMessageBase 和平台已验证的内部会话编号。"""
+    """保存待发送消息和平台已验证的内部会话编号。"""
 
     api_message: Mapping[str, Any]
     conversation_id: int
+    queued_at: float = field(default_factory=time.monotonic)
 
 
 class _ManagedConnection(Protocol):
@@ -99,6 +136,9 @@ class MaiBotBindingConnection:
         self._loop_ready = threading.Event()
         self._stop_requested = threading.Event()
         self._recent_conversations: OrderedDict[int, float] = OrderedDict()
+        self._diagnostics_lock = threading.Lock()
+        self._diagnostics: dict[str, dict[str, Any]] = {}
+        self._outbound_job_id: int | None = None
 
     def start(self) -> None:
         """幂等启动当前绑定自己的后台线程，不与其他绑定共享事件循环。"""
@@ -110,7 +150,7 @@ class MaiBotBindingConnection:
             self._loop_ready.clear()
             self._thread = threading.Thread(
                 target=self._thread_main,
-                name=f"maibot-{self.key.tenant_id}-{self.key.binding_id}",
+                name=f"maibot-{self.key.tenant_id}-{self.key.binding_id}-{self.key.connection_id}",
                 daemon=True,
             )
             self._thread.start()
@@ -157,6 +197,19 @@ class MaiBotBindingConnection:
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=5)
 
+    def status(self) -> dict[str, Any]:
+        connected = self._connected_event
+        running = self._thread is not None and self._thread.is_alive() and not self._stop_requested.is_set()
+        with self._diagnostics_lock:
+            return {"state": "connected" if connected and connected.is_set() else "connecting" if running else "stopped",
+                    "diagnostics": self._diagnostics.copy(), "outbound_job_id": self._outbound_job_id}
+
+    def record(self, stage: str, code: str, *, job_id: int | None = None) -> None:
+        with self._diagnostics_lock:
+            self._diagnostics[stage] = {"code": code, "at": datetime.now(timezone.utc).isoformat()}
+            if job_id is not None:
+                self._outbound_job_id = job_id
+
     def _thread_main(self) -> None:
         try:
             asyncio.run(self._run())
@@ -197,6 +250,7 @@ class MaiBotBindingConnection:
         queue = self._queue
         if queue is None or queue.full() or self._stop_requested.is_set():
             return False
+        self.record("forward", "queued")
         queue.put_nowait(submission)
         return True
 
@@ -216,6 +270,9 @@ class MaiBotBindingConnection:
             try:
                 ssl_context = _build_ssl_context(self.config.ws_url, verify_ssl=self.config.verify_ssl)
                 headers = {
+                    "Authorization": self.config.api_key,
+                    "platform": self.config.platform_name,
+                } if self.config.protocol == "maim" else {
                     "x-uuid": f"mbs-{self.key.tenant_id}-{self.key.binding_id}-{uuid.uuid4().hex}",
                     "x-apikey": self.config.api_key,
                     "x-platform": self.config.platform_name,
@@ -234,6 +291,7 @@ class MaiBotBindingConnection:
                     self._websocket = websocket
                     if self._connected_event is not None:
                         self._connected_event.set()
+                    self.record("connection", "connected")
                     logger.info(
                         "maibot binding connected",
                         extra={"tenant_id": self.key.tenant_id, "binding_id": self.key.binding_id},
@@ -241,8 +299,9 @@ class MaiBotBindingConnection:
                     await self._receive_loop(websocket)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as error:
                 if not self._is_stopping():
+                    self.record("connection", maibot_connection_error(error))
                     logger.warning(
                         "maibot binding connection lost",
                         extra={"tenant_id": self.key.tenant_id, "binding_id": self.key.binding_id},
@@ -257,10 +316,14 @@ class MaiBotBindingConnection:
 
     async def _receive_loop(self, websocket: Any) -> None:
         while not self._is_stopping():
-            raw_message = await asyncio.wait_for(
-                websocket.recv(),
-                timeout=max(30, int(self.config.receive_timeout_seconds)),
-            )
+            try:
+                raw_message = await asyncio.wait_for(
+                    websocket.recv(),
+                    timeout=max(30, int(self.config.receive_timeout_seconds)),
+                )
+            except asyncio.TimeoutError:
+                # 安静的聊天不代表连接失效；存活由 WebSocket ping/pong 检测。
+                continue
             if isinstance(raw_message, bytes):
                 if len(raw_message) > MAX_WEBSOCKET_MESSAGE_BYTES:
                     continue
@@ -273,14 +336,28 @@ class MaiBotBindingConnection:
                 package = json.loads(raw_text)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(package, Mapping) or str(package.get("type") or "") != "sys_std":
+            if not isinstance(package, Mapping):
                 continue
-            conversation_id = _extract_conversation_id(package)
+            conversation_id = _extract_conversation_id(
+                package,
+                protocol=self.config.protocol,
+                platform_name=self.config.platform_name,
+            )
             if conversation_id is None or not self._conversation_is_recent(conversation_id):
                 # MaiBot 只能回复当前连接近期实际发送过的内部会话。回包里的任意
                 # 原始群号、用户号或其他绑定会话编号都不会进入平台出站队列。
                 continue
-            await asyncio.to_thread(self.reply_handler, self.key, conversation_id, dict(package))
+            try:
+                outcome = await asyncio.to_thread(self.reply_handler, self.key, conversation_id, dict(package))
+                if outcome is not None:
+                    self.record("reply", outcome.code, job_id=outcome.job_id)
+            except Exception:
+                self.record("reply", "reply_failed")
+                # 一条回复入库失败不应导致重建连接，也不记录消息或凭据。
+                logger.warning(
+                    "maibot reply handler failed",
+                    extra={"tenant_id": self.key.tenant_id, "binding_id": self.key.binding_id},
+                )
 
     async def _sender_loop(self) -> None:
         while not self._is_stopping():
@@ -295,17 +372,10 @@ class MaiBotBindingConnection:
                 queue.task_done()
 
     async def _send_submission(self, submission: _QueuedSubmission) -> None:
-        attempts = max(1, int(self.config.max_send_retries))
-        for attempt in range(attempts):
-            if self._is_stopping():
-                return
-            connected_event = self._connected_event
-            if connected_event is None:
-                return
-            await connected_event.wait()
-            websocket = self._websocket
-            if websocket is None:
-                continue
+        # 新版 MaiM 发送失败时结果可能不明，不自动重放以免麦麦重复回复。
+        attempts = 1 if self.config.protocol == "maim" else max(1, int(self.config.max_send_retries))
+        package = dict(submission.api_message)
+        if self.config.protocol == "legacy_api":
             package = {
                 "ver": 1,
                 "msg_id": f"mbs-{uuid.uuid4().hex}",
@@ -315,11 +385,33 @@ class MaiBotBindingConnection:
                     "platform": self.config.platform_name,
                     "timestamp": time.time(),
                 },
-                "payload": dict(submission.api_message),
+                "payload": package,
             }
+        for attempt in range(attempts):
+            if self._is_stopping():
+                return
+            connected_event = self._connected_event
+            if connected_event is None:
+                return
+            remaining = max(1, int(self.config.max_message_age_seconds)) - (time.monotonic() - submission.queued_at)
+            if remaining <= 0:
+                self.record("forward", "expired")
+                return
+            try:
+                await asyncio.wait_for(connected_event.wait(), timeout=remaining)
+            except asyncio.TimeoutError:
+                self.record("forward", "expired")
+                return
+            websocket = self._websocket
+            if websocket is None:
+                continue
             self._remember_conversation(submission.conversation_id)
             try:
-                await websocket.send(json.dumps(package, ensure_ascii=False, separators=(",", ":")))
+                await asyncio.wait_for(
+                    websocket.send(json.dumps(package, ensure_ascii=False, separators=(",", ":"))),
+                    timeout=self.config.connect_timeout_seconds,
+                )
+                self.record("forward", "forwarded")
                 return
             except asyncio.CancelledError:
                 raise
@@ -329,6 +421,7 @@ class MaiBotBindingConnection:
                 await self._close_websocket()
                 if attempt + 1 < attempts:
                     await self._wait_or_stop(self.config.reconnect_delay_seconds)
+        self.record("forward", "forward_failed")
 
     def _remember_conversation(self, conversation_id: int) -> None:
         current_time = time.monotonic()
@@ -407,6 +500,31 @@ class MaiBotClientRegistry:
         if connection is not None:
             connection.stop()
 
+    def start(self, *, key: MaiBotConnectionKey, config: MaiBotConnectionConfig, reply_handler: MaiBotReplyHandler) -> None:
+        self._get_or_replace(key=key, config=config, reply_handler=reply_handler)
+
+    def status(self, key: MaiBotConnectionKey, *, generation: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            connection = self._connections.get(key)
+            if connection is not None and generation is not None and connection.config.generation != generation:
+                return {"state": "waiting"}
+        getter = getattr(connection, "status", None)
+        return getter() if callable(getter) else {"state": "waiting"}
+
+    def record_forward(self, key: MaiBotConnectionKey, generation: str, code: str) -> None:
+        with self._lock:
+            connection = self._connections.get(key)
+            if connection is not None and connection.config.generation == generation:
+                record = getattr(connection, "record", None)
+                if callable(record):
+                    record("forward", code)
+
+    def stop_binding(self, tenant_id: int, binding_id: int) -> None:
+        with self._lock:
+            keys = [key for key in self._connections if key.tenant_id == tenant_id and key.binding_id == binding_id]
+        for key in keys:
+            self.stop(key)
+
     def stop_all(self) -> None:
         with self._lock:
             connections = list(self._connections.values())
@@ -440,20 +558,68 @@ class MaiBotClientRegistry:
         return new_connection
 
 
-def _extract_conversation_id(package: Mapping[str, Any]) -> int | None:
-    payload = package.get("payload")
-    if not isinstance(payload, Mapping):
+def maibot_message_payload(package: Mapping[str, Any], *, protocol: str = "maim") -> Mapping[str, Any] | None:
+    """显式区分 MaiM 与旧 API；不猜测协议，不把控制消息当聊天。"""
+
+    if protocol == "legacy_api":
+        if package.get("type") != "sys_std" or not isinstance(package.get("payload"), Mapping):
+            return None
+        payload = package["payload"]
+    elif protocol == "maim":
+        payload = package
+    else:
+        return None
+    if payload.get("is_custom_message") or payload.get("message_type_name"):
+        return None
+    return payload
+
+
+def _extract_conversation_id(
+    package: Mapping[str, Any],
+    *,
+    protocol: str = "maim",
+    platform_name: str | None = None,
+) -> int | None:
+    payload = maibot_message_payload(package, protocol=protocol)
+    if payload is None:
         return None
     message_info = payload.get("message_info")
     if not isinstance(message_info, Mapping):
         return None
-    group_info = message_info.get("group_info")
-    user_info = message_info.get("user_info")
+    if platform_name is not None and message_info.get("platform") != platform_name:
+        return None
+    if protocol == "maim" and (
+        not isinstance(message_info.get("message_id"), str) or not message_info["message_id"].strip()
+    ):
+        return None
+    target = message_info
+    if protocol == "maim" and message_info.get("receiver_info") is not None:
+        target = message_info["receiver_info"]
+        if not isinstance(target, Mapping):
+            return None
+        original_group = message_info.get("group_info")
+        receiver_group = target.get("group_info")
+        if original_group is not None and (
+            not isinstance(original_group, Mapping)
+            or not isinstance(receiver_group, Mapping)
+            or original_group.get("group_id") != receiver_group.get("group_id")
+        ):
+            return None
+    group_info = target.get("group_info")
+    user_info = target.get("user_info")
     token = ""
-    if isinstance(group_info, Mapping):
+    if group_info is not None:
+        if not isinstance(group_info, Mapping):
+            return None
+        if platform_name is not None and group_info.get("platform") is not None and group_info["platform"] != platform_name:
+            return None
         token = str(group_info.get("group_id") or "").strip()
-    if not token and isinstance(user_info, Mapping):
+    elif isinstance(user_info, Mapping):
+        if platform_name is not None and user_info.get("platform") is not None and user_info["platform"] != platform_name:
+            return None
         token = str(user_info.get("user_id") or "").strip()
+    if len(token) > 128:
+        return None
     match = CONVERSATION_TOKEN_PATTERN.fullmatch(token)
     if not match:
         return None
@@ -472,15 +638,13 @@ def _build_ssl_context(ws_url: str, *, verify_ssl: bool) -> ssl.SSLContext | Non
 maibot_client_registry = MaiBotClientRegistry()
 
 
-def stop_maibot_connection(tenant_id: int, binding_id: int) -> None:
+def stop_maibot_connection(tenant_id: int, binding_id: int, connection_id: str | None = None) -> None:
     """停止一个租户绑定的连接，供配置保存和绑定停用流程调用。"""
 
-    maibot_client_registry.stop(
-        MaiBotConnectionKey(
-            tenant_id=int(tenant_id),
-            binding_id=int(binding_id),
-        )
-    )
+    if connection_id is None:
+        maibot_client_registry.stop_binding(int(tenant_id), int(binding_id))
+    else:
+        maibot_client_registry.stop(MaiBotConnectionKey(int(tenant_id), int(binding_id), connection_id))
 
 
 def stop_all_maibot_connections() -> None:

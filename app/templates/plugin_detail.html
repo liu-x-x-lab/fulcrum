@@ -15,6 +15,7 @@
 {% endblock %}
 {% block content %}
 {% set info = plugin_runtime_info %}
+{% if plugin.code == 'maibot_adapter' %}<link rel="stylesheet" href="/static/css/maibot-connections.css?v=diagnostics-1" />{% endif %}
 <section class="work-surface">
   <p class="plugin-detail-description">{{ plugin.description or '这个插件暂时还没有补充描述。' }}</p>
   {% if info.manifest_errors or info.manifest_warnings %}
@@ -55,7 +56,7 @@
   {% set item = card.binding %}
   {% set enabled = item.status == 'enabled' %}
   {% set dispatch_view = card.dispatch_view or {} %}
-  <form method="post" action="/plugins/{{ item.id }}/edit" class="gf-card{% if enabled %} is-on{% endif %}" data-gf-card data-gf-key="plugin-binding-{{ item.id }}" data-gf-save-url="/plugins/{{ item.id }}/edit"{% if loop.first %} data-gf-open="1"{% endif %}>
+  <form method="post" action="/plugins/{{ item.id }}/edit" class="gf-card{% if enabled %} is-on{% endif %}" data-gf-card data-gf-key="plugin-binding-{{ item.id }}"{% if plugin.code != 'maibot_adapter' %} data-gf-save-url="/plugins/{{ item.id }}/edit"{% endif %}{% if loop.first %} data-gf-open="1"{% endif %}>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     <input type="hidden" name="next" value="/plugins/{{ plugin.id }}" />
     <header class="gf-head">
@@ -76,11 +77,13 @@
     </header>
     <div class="gf-collapse" data-gf-collapse hidden>
       <div class="gf-body">
-        <div class="form-grid config-stack">
+        {% if plugin.code == 'maibot_adapter' %}
+          {% include '_maibot_connections.html' %}
+        {% else %}<div class="form-grid config-stack">
           {% with config_view=card.config_view %}
             {% include '_plugin_config_form.html' %}
           {% endwith %}
-        </div>
+        </div>{% endif %}
         <div class="plugin-binding-info">
           <p class="muted-text">群默认范围：{{ '对所有群开放' if item.group_default_enabled else '仅对单独启用的群开放' }}。可到<a href="/chatrooms/plugin-scopes?plugin_id={{ plugin.id }}">群插件批量管理</a>查看和调整群聊。</p>
           <p class="muted-text">最近执行：{{ card.runtime_view.last_execution_at|bj_time if card.runtime_view.last_execution_at else '-' }}　{{ card.runtime_view.last_execution_summary or '' }}</p>
@@ -88,7 +91,7 @@
         </div>
       </div>
       <footer class="gf-foot">
-        <button class="btn" type="submit"><span class="i i-save" aria-hidden="true"></span><span>保存</span></button>
+        {% if plugin.code != 'maibot_adapter' %}<button class="btn" type="submit"><span class="i i-save" aria-hidden="true"></span><span>保存</span></button>{% endif %}
         {# 重载是另一个表单(HTML 不允许表单嵌套),用 form 属性让这个按钮提交它。 #}
         <button class="btn btn-secondary btn-icon" type="submit" form="reload-binding-{{ item.id }}" title="重载" aria-label="重载"><span class="i i-refresh" aria-hidden="true"></span></button>
         <button class="btn btn-danger" type="submit" form="unbind-binding-{{ item.id }}">解绑机器人</button>
@@ -184,4 +187,5 @@
 </section>
 <script src="/static/js/group-features.js" defer></script>
 <script src="/static/js/plugin-delivery-settings.js" defer></script>
+{% if plugin.code == 'maibot_adapter' %}<script src="/static/js/maibot-connections.js?v=wechat-media-1" defer></script>{% endif %}
 {% endblock %}

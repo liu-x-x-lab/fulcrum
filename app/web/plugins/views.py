@@ -27,6 +27,8 @@ def build_binding_schema_cards(bindings: list[BotPlugin]) -> list[dict[str, obje
             binding.config_json,
             secret_config=secret_config,
         )
+        if plugin_code == "maibot_adapter":
+            config_view["management_url"] = f"/plugins/{binding.plugin_id}"
         cards.append(
             {
                 "binding": binding,

@@ -1,0 +1,65 @@
+.maibot-manager { min-width: 0; }
+.maibot-manager [hidden] { display: none !important; }
+.maibot-manager .mb-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.maibot-manager h4 { margin: 0; font-size: 15px; }
+.maibot-manager .mb-heading p { margin: 4px 0 0; }
+.maibot-manager .mb-connections { display: flex; gap: 9px; flex-wrap: wrap; margin: 12px 0 20px; }
+.maibot-manager .mb-connection { flex: 1 1 160px; padding: 11px 13px; text-align: left; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.maibot-manager .mb-connection[aria-pressed="true"] { border-color: var(--primary); background: var(--primary-soft); }
+.maibot-manager .mb-connection strong,.maibot-manager .mb-connection small { display: block; }
+.maibot-manager .mb-connection small { color: var(--text-soft); margin-top: 4px; }
+.maibot-manager .mb-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.maibot-manager .mb-fields > label,.maibot-manager .mb-search > label { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; }
+.maibot-manager input:not([type="checkbox"]),.maibot-manager select { width: 100%; min-width: 0; }
+.maibot-manager .mb-full { grid-column: 1 / -1; }
+.maibot-manager .mb-inline-check { display: inline-flex !important; flex-direction: row !important; align-items: center !important; gap: 8px; }
+.maibot-manager input[type="checkbox"] { width: 17px; height: 17px; margin: 0; accent-color: var(--primary); flex: 0 0 17px; }
+.maibot-manager .mb-scope-heading { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; margin-top: 22px; }
+.maibot-manager .mb-chat-picker { position: relative; margin-top: 14px; }
+.maibot-manager .mb-picker-triggers { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.maibot-manager .mb-picker-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-width: 0; padding: 12px 14px; text-align: left; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; cursor: pointer; }
+.maibot-manager .mb-picker-trigger small { display: block; margin-top: 3px; color: var(--text-soft); }
+.maibot-manager .mb-picker-trigger[aria-expanded="true"] { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+.maibot-manager .mb-picker-trigger[aria-expanded="true"] .ui-select-caret { transform: rotate(225deg); }
+.maibot-manager .mb-chat-panel { position: fixed; inset: auto; margin: 0; padding: 14px; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; min-width: 0; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow-card); overflow: visible; }
+.maibot-manager .mb-chat-panel.mb-picker-fallback { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; right: 0; max-height: 65vh; }
+.maibot-manager .mb-picker-heading { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.maibot-manager .mb-picker-heading .btn { padding: 7px 10px; }
+.maibot-manager .mb-search { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, 190px); gap: 12px; flex-shrink: 0; }
+.maibot-manager .mb-target-list { overflow-y: auto; overscroll-behavior: contain; min-height: 0; flex: 1 1 auto; scrollbar-gutter: stable; }
+.maibot-manager [data-mb-result-count] { margin-left: auto; }
+.maibot-manager .mb-target { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.maibot-manager .mb-target-label { display: flex; align-items: center; flex: 1; min-width: 0; gap: 10px; }
+.maibot-manager .mb-target-copy { min-width: 0; overflow-wrap: anywhere; }
+.maibot-manager .mb-target-copy strong,.maibot-manager .mb-target-copy small { display: block; }
+.maibot-manager .mb-target-copy small { color: var(--text-soft); }
+.maibot-manager .mb-target-copy .mb-warning { color: var(--warning, #996121); }
+.maibot-manager .mb-target .btn { flex-shrink: 0; }
+.maibot-manager .mb-pager { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; border-top: 1px solid var(--border); padding-top: 9px; }
+.maibot-manager .mb-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 12px 0; }
+.maibot-manager .mb-selected-chip { border: 0; border-radius: 6px; padding: 5px 8px; color: var(--primary-strong); background: var(--primary-soft); text-align: left; overflow-wrap: anywhere; max-width: 100%; }
+.maibot-manager .mb-advanced { border-top: 1px solid var(--border); padding-top: 13px; margin-top: 18px; }
+.maibot-manager .mb-advanced .mb-fields { margin-top: 14px; }
+.maibot-manager .mb-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+.maibot-manager .mb-legacy { padding: 12px; border-radius: 8px; background: var(--surface-muted); margin-top: 12px; }
+.maibot-manager .mb-legacy p { margin: 0 0 9px; }
+.maibot-manager .mb-feedback-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
+.maibot-manager [data-mb-feedback] { margin: 0; color: var(--text-soft); overflow-wrap: anywhere; }
+.maibot-manager [data-mb-feedback][data-error="true"] { color: var(--danger); }
+.maibot-manager .mb-chat-panel.mb-picker-compact { gap: 8px; }
+.maibot-manager .mb-picker-compact .mb-search { grid-template-columns: minmax(0, 1fr) minmax(110px, 140px); }
+.maibot-manager .mb-picker-compact .mb-search > label { justify-content: flex-end; }
+.maibot-manager .mb-picker-compact [data-mb-search-label] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 600px) {
+  .maibot-manager .mb-fields,.maibot-manager .mb-search { grid-template-columns: minmax(0,1fr); }
+  .maibot-manager .mb-chat-panel { padding: 12px; }
+  .maibot-manager .mb-target { flex-wrap: wrap; }
+  .maibot-manager .mb-target-label { flex-basis: 100%; }
+  .maibot-manager .mb-target > button { margin-left: 27px; }
+  .maibot-manager .mb-feedback-row { flex-wrap: wrap; }
+}
+.mb-diagnostics { padding-block: .6rem; margin-bottom: .9rem; border-block: 1px solid var(--border, #e3e7eb); }
+.maibot-manager .mb-diagnostics .mb-heading { margin-bottom: 0; }
+.mb-diagnostics dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .5rem 1rem; margin: .4rem 0 0; }
+.mb-diagnostics dt { font-weight: 600; }
+.mb-diagnostics dd { margin: .15rem 0 0; overflow-wrap: anywhere; font-size: .875rem; }
