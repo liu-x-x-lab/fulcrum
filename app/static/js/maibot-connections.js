@@ -341,7 +341,10 @@
     document.addEventListener("scroll", function (event) {
       if (!pickerOpen || !(event.target instanceof Node) || !event.target.contains(pickerTrigger)) return;
       var rect = pickerTrigger.getBoundingClientRect();
-      if (pickerAnchor && (Math.abs(rect.top - pickerAnchor.top) > 1 || Math.abs(rect.left - pickerAnchor.left) > 1)) closePicker(false);
+      if (!pickerAnchor || (Math.abs(rect.top - pickerAnchor.top) <= 1 && Math.abs(rect.left - pickerAnchor.left) <= 1)) return;
+      // 点击前浏览器可能先滚动按钮；可见时跟随定位，否则同一次点击会先关后开。
+      if (rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth) closePicker(false);
+      else positionPicker();
     }, true);
     window.addEventListener("resize", positionPicker);
     if (window.visualViewport) window.visualViewport.addEventListener("resize", positionPicker);

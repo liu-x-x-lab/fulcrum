@@ -175,6 +175,12 @@ def test_chat_dropdown_keyboard_paging_and_dismissal(connections_context, browse
             if size[0] < 600:
                 root.locator('[data-mb-picker-close]').click()
             else:
+                # 浏览器在点击按钮前可能滚动页面；仍在视口内的按钮不应因此重新打开面板。
+                page.evaluate("""async () => {
+                    window.scrollBy(0, window.scrollY > 12 ? -8 : 8);
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                }""")
+                expect(panel).to_be_visible()
                 direct.click()
             expect(panel).to_be_hidden()
             root.locator("[data-mb-save]").first.click()
