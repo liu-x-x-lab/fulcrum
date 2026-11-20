@@ -13,6 +13,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEST_ROOTS = (Path(tempfile.gettempdir()).resolve(), (PROJECT_ROOT / ".run" / "test-runtime").resolve())
 
 
+@pytest.fixture
+def approved_test_proxy_routes(monkeypatch):
+    from app.core.settings import settings
+    monkeypatch.setattr(settings, "plugin_proxy_allow_direct", True)
+    monkeypatch.setattr(settings, "plugin_proxy_allowed_urls", ",".join((
+        "http://proxy.example.test:8080", "socks5://127.0.0.1:1080",
+        "http://binding.test:8080", "socks5://group.test:1080",
+        "http://group-proxy.test:8080", "socks5h://group-proxy.test:1080",
+    )))
+
+
 def _require_test_path(value: str | Path) -> Path:
     """只允许临时目录或仓库专用测试目录，解析符号链接后再次检查真实归属。"""
 

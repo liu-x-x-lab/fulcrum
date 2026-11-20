@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     # 本地连接器扫码期间使用的临时 SOCKS 中继监听地址；只服务登录会话，终态立即失效。
     local_proxy_relay_host: str = "127.0.0.1"
     local_proxy_relay_port: int = 9165
+    plugin_proxy_allowed_urls: str = ""
+    plugin_proxy_allow_direct: bool = False
     # 首版计费只展示人工付款说明；二维码路径和银行信息均由部署环境配置，不写死到模板。
     billing_payment_title: str = "Fulcrum 人工付款"
     billing_payment_instructions: str = "请完成转账后填写交易流水号并上传付款凭证。"

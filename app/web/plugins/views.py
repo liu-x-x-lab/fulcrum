@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.entities import BotPlugin, Plugin
 from app.services.plugin_runtime import get_plugin_runtime_meta, get_plugin_runtime_meta_map
-from app.services.plugin_schemas import build_plugin_config_view
+from app.services.plugin_schemas import build_plugin_config_view, dump_config_json, parse_config_json
 from app.services.plugin_secrets import decrypt_plugin_secret_config
 from app.services.runtime import build_binding_dispatch_view, build_binding_runtime_view
 
@@ -22,9 +22,17 @@ def build_binding_schema_cards(bindings: list[BotPlugin]) -> list[dict[str, obje
             binding_id=int(binding.id),
             encrypted=binding.secret_config_encrypted,
         )
+        config_data = parse_config_json(binding.config_json)
+        proxy_bypass = str(config_data.pop("proxy_bypass", "") or "").strip()
+        proxy_url = str(config_data.pop("proxy_url", "") or "").strip()
+        direct = config_data.pop("proxy_mode", "") == "direct"
+        # 历史代理账号字段不再支持，也不进入原始 JSON 预览。
+        config_data.pop("proxy_username", None)
+        config_data.pop("proxy_password", None)
+        # 代理配置只由独立区域展示；原始 JSON 预览和应用配置不再重复暴露。
         config_view = build_plugin_config_view(
             plugin_code,
-            binding.config_json,
+            dump_config_json(config_data),
             secret_config=secret_config,
         )
         if plugin_code == "maibot_adapter":
@@ -33,12 +41,32 @@ def build_binding_schema_cards(bindings: list[BotPlugin]) -> list[dict[str, obje
             {
                 "binding": binding,
                 "config_view": config_view,
+                "proxy_view": _proxy_view(
+                    proxy_url=proxy_url,
+                    direct=direct,
+                    proxy_bypass=proxy_bypass,
+                ),
                 "has_schema": config_view["mode"] == "schema",
                 "runtime_info": get_plugin_runtime_meta(plugin_code),
                 "runtime_view": build_binding_runtime_view(binding),
             }
         )
     return cards
+
+
+def _proxy_view(
+    *,
+    proxy_url: str,
+    proxy_bypass: str,
+    direct: bool,
+) -> dict[str, object]:
+    """向页面提供可编辑的代理地址和绕过列表；代理不支持账号密码。"""
+
+    return {
+        "mode": "direct" if direct else "proxy" if proxy_url else "inherit",
+        "url": proxy_url,
+        "bypass": proxy_bypass,
+    }
 
 
 def build_binding_schema_cards_with_dispatch(db: Session, bindings: list[BotPlugin]) -> list[dict[str, object]]:
