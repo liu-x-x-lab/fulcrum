@@ -205,6 +205,33 @@ SSRF barrier. Untrusted public-resource URLs also need the applicable validation
 from [`safe_fetch.py`](../app/services/safe_fetch.py) and media/screenshot services.
 Do not bypass those boundaries with direct HTTP or arbitrary filesystem access.
 
+### Outbound proxy
+
+Bindings default to **inherit**, preserving the deployment's environment proxy
+and `NO_PROXY`. Administrators authorize exact proxy endpoints with
+`PLUGIN_PROXY_ALLOWED_URLS` (comma-separated canonical URLs, e.g.
+`http://proxy.example.org:8080`); the empty default authorizes none.
+Explicit direct routing and custom bypass rules additionally require
+`PLUGIN_PROXY_ALLOW_DIRECT=true`. Proxy mode uses `proxy_url` and `proxy_bypass` (host
+suffixes, comma separated); the address and bypass fields are only shown when
+proxy mode is selected. Proxy configuration is address-only and does not accept
+credentials. Supported schemes are `http://`, `socks5://` and `socks5h://`; HTTP
+proxy URLs for HTTPS targets use CONNECT.
+
+A group's plugin settings have three modes: `inherit` (default),
+`direct` and `proxy`. When a group has no saved proxy setting it follows the
+binding proxy; saving
+`direct` bypasses the binding proxy for that group. Proxy groups use
+`group_proxy_url` and `group_proxy_bypass` only. Group settings take precedence
+once saved. Legacy stored values `custom` and `inherit` are read as `proxy` and
+“follow the binding proxy”.
+
+The runtime applies the effective proxy to every `PluginHttpClient` request in
+that binding/conversation, including redirects that are not bypassed, and removes
+all `proxy_*` and `group_proxy_*` keys before the plugin sees `request.config`.
+Plugins must not implement their own proxy handling or read environment proxy
+variables.
+
 Store stable member IDs and resolve names when rendering with
 `member_names(db, channel_id=..., group_external_id=..., user_ids=[...])`.
 For large groups, split state by member instead of exceeding a single state record.

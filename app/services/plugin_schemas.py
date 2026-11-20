@@ -160,7 +160,10 @@ def merge_schema_config(
     schema = get_plugin_config_schema(plugin_code)
     if not schema:
         config = parse_config_json(fallback_config_json if fallback_config_json is not None else existing_config_json)
-        return PluginConfigMergeResult(config_json=dump_config_json(merge_auto_revoke_form(config, submitted_form)))
+        result = PluginConfigMergeResult(
+            config_json=dump_config_json(merge_auto_revoke_form(config, submitted_form))
+        )
+        return _merge_proxy_fields(result, submitted_form)
 
     existing = parse_config_json(existing_config_json)
     sensitive_names = {item.name for item in schema.fields if item.sensitive}
@@ -177,7 +180,10 @@ def merge_schema_config(
         for field_name in sensitive_names:
             fallback.pop(field_name, None)
         selected = fallback if fallback_config_json else existing
-        return PluginConfigMergeResult(config_json=dump_config_json(merge_auto_revoke_form(selected, submitted_form)))
+        result = PluginConfigMergeResult(
+            config_json=dump_config_json(merge_auto_revoke_form(selected, submitted_form))
+        )
+        return _merge_proxy_fields(result, submitted_form)
 
     merged = dict(existing)
     secret_patch: dict[str, Any] = {}
@@ -209,11 +215,98 @@ def merge_schema_config(
         else:
             merged[item.name] = parsed_value
 
-    return PluginConfigMergeResult(
+    result = PluginConfigMergeResult(
         config_json=dump_config_json(merge_auto_revoke_form(merged, submitted_form)),
         secret_patch=secret_patch,
         clear_secret_fields=tuple(clear_secret_fields),
     )
+    return _merge_proxy_fields(result, submitted_form)
+
+
+def _merge_proxy_fields(
+    result: PluginConfigMergeResult,
+    submitted_form: Mapping[str, Any],
+) -> PluginConfigMergeResult:
+    """把绑定页的代理字段并入配置；代理只支持无账号密码的地址。"""
+
+    if not {"proxy_mode", "proxy_url", "proxy_bypass"} & set(submitted_form):
+        return result
+    from app.services.plugin_runtime.proxy import (
+        PluginProxyConfigError,
+        normalize_bypass,
+        approved_direct, approved_proxy,
+    )
+
+    config = parse_config_json(result.config_json)
+    # 代理配置改由独立字段保存；历史账号密码字段在保存时一并清理。
+    config.pop("proxy_url", None)
+    config.pop("proxy_username", None)
+    proxy_mode = str(submitted_form.get("proxy_mode") or "").strip().lower()
+    config.pop("proxy_mode", None)
+    if proxy_mode and proxy_mode not in {"inherit", "direct", "proxy"}:
+        raise ValueError("代理模式不正确")
+    proxy_url = str(submitted_form.get("proxy_url") or "").strip()
+    clear_proxy = _parse_boolean(submitted_form.get("clear_proxy_url"), False)
+    # 未提交模式时保持旧表单语义：空地址或“清除”都按直连处理。
+    direct_mode = proxy_mode == "direct" or (not proxy_mode and (clear_proxy or not proxy_url))
+    if proxy_mode == "proxy" and not proxy_url:
+        raise ValueError("选择“代理”后必须填写代理地址")
+    if proxy_mode == "direct":
+        approved_direct()
+        config["proxy_mode"] = "direct"
+    if direct_mode or proxy_mode == "inherit":
+        proxy_url = ""
+    try:
+        bypass = normalize_bypass(submitted_form.get("proxy_bypass"))
+    except PluginProxyConfigError as exc:
+        raise ValueError("代理绕过列表格式不正确") from exc
+
+    secret_patch = dict(result.secret_patch)
+    secret_patch.pop("proxy_password", None)
+    secret_patch.pop("proxy_url", None)
+    clear_secret_fields = list(result.clear_secret_fields)
+    for name in ("proxy_url", "proxy_password"):
+        if name not in clear_secret_fields:
+            clear_secret_fields.append(name)
+
+    if not proxy_url:
+        config.pop("proxy_bypass", None)
+        return PluginConfigMergeResult(
+            config_json=dump_config_json(config),
+            secret_patch=secret_patch,
+            clear_secret_fields=tuple(clear_secret_fields),
+        )
+
+    try:
+        approved_proxy(proxy_url, bypass=bypass)
+    except PluginProxyConfigError as exc:
+        raise ValueError(_proxy_error_message(str(exc))) from exc
+
+    config["proxy_url"] = proxy_url
+    if bypass:
+        config["proxy_bypass"] = ",".join(bypass)
+    else:
+        config.pop("proxy_bypass", None)
+    return PluginConfigMergeResult(
+        config_json=dump_config_json(config),
+        secret_patch=secret_patch,
+        clear_secret_fields=tuple(clear_secret_fields),
+    )
+
+
+def _proxy_error_message(code: str) -> str:
+    messages = {
+        "proxy_url_not_approved": "部署方尚未批准此代理地址",
+        "部署策略未允许插件显式直连": "部署策略未允许插件显式直连或绕过代理",
+        "proxy_url_scheme_required": "代理地址需要以 http://、socks5:// 或 socks5h:// 开头",
+        "proxy_url_scheme_invalid": "代理地址只支持 http、socks5、socks5h",
+        "proxy_url_host_required": "代理地址缺少主机",
+        "proxy_url_port_invalid": "代理端口不合法，只允许 1-65535",
+        "proxy_url_credentials_incomplete": "代理地址不支持账号密码",
+        "proxy_url_credentials_inline": "代理地址不支持内嵌账号密码",
+        "proxy_url_invalid": "代理地址不能包含路径、查询或片段",
+    }
+    return messages.get(code, "代理地址格式不正确")
 
 
 def build_schema_view(

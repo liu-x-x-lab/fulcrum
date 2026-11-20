@@ -82,6 +82,38 @@ def test_first_bind_defaults_closed_unless_explicitly_opened(pages, choice, expe
         assert binding.group_default_enabled is expected
 
 
+def test_first_bind_can_store_proxy_from_bind_form(pages, approved_test_proxy_routes):
+    """首次绑定到机器人时可以直接选择代理并保存，代理只支持地址。"""
+
+    client, ids, plugin_id, _binding_id = pages
+    with ids["factory"]() as db:
+        bot = Bot(tenant_id=ids["alpha"], name="代理绑定机器人")
+        db.add(bot)
+        db.commit()
+        bot_id = bot.id
+    csrf = _login(client, "admin")
+    response = client.post("/plugins/bind", data={
+        "csrf_token": csrf,
+        "bot_id": bot_id,
+        "plugin_id": plugin_id,
+        "proxy_mode": "proxy",
+        "proxy_url": "http://proxy.example.test:8080",
+        "proxy_bypass": ".internal.test",
+        # 历史页面可能仍提交账号字段，必须被忽略。
+        "proxy_username": "proxy-user",
+        "proxy_password": "proxy-pass",
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    with ids["factory"]() as db:
+        binding = db.scalar(select(BotPlugin).where(BotPlugin.bot_id == bot_id, BotPlugin.plugin_id == plugin_id))
+        config = json.loads(binding.config_json)
+        assert config["proxy_url"] == "http://proxy.example.test:8080"
+        assert config["proxy_bypass"] == "internal.test"
+        assert "proxy_username" not in config
+        assert "proxy_password" not in binding.config_json
+        assert binding.secret_config_encrypted is None
+
+
 def test_saving_existing_binding_preserves_scope_and_rebind_asks_again(pages):
     client, ids, plugin_id, binding_id = pages
     csrf = _login(client, "admin")
