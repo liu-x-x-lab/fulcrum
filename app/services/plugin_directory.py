@@ -1653,6 +1653,16 @@ def _collect_outbound_payloads(
         ]
         normalized = [item for item in normalized if item]
         if normalized:
+            if context.channel_type == "wechat_webridge" and context.plugin_code == "douyin_parser":
+                from app.services.wechat_webridge.video_size import OversizeCard, configured_limit_mib
+
+                # 此时仍可区分原始播放地址和稍后由 base64 落盘生成的 URL。
+                for item in normalized:
+                    if item.get("message_type") == "video" and item.get("video_url"):
+                        item["oversize_card"] = OversizeCard(
+                            max_size_mb=configured_limit_mib(context.binding_config.get("webridge_video_limit_mib", 100)),
+                            title=str(output.get("author") or "抖音作品")[:200],
+                            description=str(output.get("title") or "抖音作品")[:1000])
             return normalized
 
     explicit = output.get("outbound_messages")
@@ -1746,6 +1756,16 @@ def _normalize_reply_item(item: Mapping[str, Any], *, channel_type: str = "") ->
             payload["voice_type"] = voice_type
         return payload
     if reply_type == "video":
+        if item.get("video_url") is not None:
+            from app.services.plugin_runtime.replies import PluginReplyError, standard_replies
+            from app.services.safe_fetch import ensure_public_http_url
+
+            if channel_type != "wechat_webridge":
+                raise PluginReplyError("当前渠道不支持按播放地址发送视频")
+            reply, = standard_replies([item])
+            # 交给手机取视频；入队前只核对目标是否为公网地址，不请求内容、不改签名参数。
+            ensure_public_http_url(reply["video_url"])
+            return {"message_type": "video", "video_url": reply["video_url"]}
         xml = str(item.get("xml") or item.get("cdn_xml") or "").strip()
         if xml:
             return {"message_type": "video", "xml": xml}

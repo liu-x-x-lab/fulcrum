@@ -1,6 +1,6 @@
 """抖音解析插件入口:识别消息里的抖音分享链接,解析后按媒资类型生成回复。
 
-解析来源与发送策略见 sources.py 和 delivery.py;这里只负责匹配、配置和结果封装。
+解析来源与发送策略见 service.py;这里只负责匹配、配置和结果封装。
 """
 
 from __future__ import annotations
@@ -93,14 +93,19 @@ def execute_action(request: PluginExecutionRequest) -> PluginExecutionResult:
         # 失败原因只含来源与错误码,不含密钥;写入日志便于区分 key 无效、超时和站点风控。
         logger.warning("抖音解析失败", extra={"reason": str(exc)[:300], "share_url": share_url})
         return _error("抖音解析服务暂时不可用,请稍后重试。", "parse_failed")
+    use_video_url = (media.get("type") == "video" and config.download_mode != "file"
+                     and request.context is not None and request.context.channel_type == "wechat_webridge")
     try:
         replies = build_replies(
             client,
             media,
             download_mode=config.download_mode,
+            use_video_url=use_video_url,
             timeout_seconds=min(30, max(5, int(deadline - time.monotonic()) + 10)),
         )
     except (PluginReplyError, PluginHttpError):
+        if use_video_url:
+            return _error("解析服务返回的视频播放地址无效。", "media_failed")
         return _error("素材下载失败,请稍后重试。", "media_failed")
 
     return PluginExecutionResult(

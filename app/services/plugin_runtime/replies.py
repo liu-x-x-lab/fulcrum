@@ -136,12 +136,20 @@ def music_reply(
 
 def video_reply(
     *,
-    video_base64: str,
-    cover_base64: str,
+    video_base64: str = "",
+    cover_base64: str = "",
+    video_url: str | None = None,
     play_length: int | None = None,
 ) -> dict[str, Any]:
-    """构造带封面的视频回复，时长使用非负秒数。"""
+    """视频由渠道按远程地址获取，或由插件提供视频、封面及可选时长。"""
 
+    if video_url is not None:
+        if video_base64 or cover_base64 or play_length is not None:
+            raise PluginReplyError("远程视频只需提供播放地址")
+        try:
+            return {"type": "video", "video_url": _validate_public_resource_url(video_url)}
+        except ValueError as exc:
+            raise PluginReplyError("视频播放地址无效") from exc
     normalized_video = _validate_base64(
         video_base64,
         max_length=MAX_VIDEO_BASE64_LENGTH,
@@ -212,6 +220,7 @@ def standard_replies(
                 video_reply(
                     video_base64=str(item.get("base64") or item.get("video_base64") or ""),
                     cover_base64=str(item.get("image_base64") or item.get("cover_base64") or ""),
+                    video_url=item.get("video_url"),
                     play_length=item.get("play_length"),
                 )
             )

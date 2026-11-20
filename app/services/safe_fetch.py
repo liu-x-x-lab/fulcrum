@@ -43,12 +43,14 @@ def ensure_public_http_url(url: str) -> str:
         port = parsed.port
     except ValueError as exc:
         raise UnsafeUrlError("端口不合法") from exc
+    if port == 0:
+        raise UnsafeUrlError("端口不合法")
     try:
         infos = socket.getaddrinfo(parsed.hostname, port or (443 if parsed.scheme.lower() == "https" else 80), type=socket.SOCK_STREAM)
     except OSError as exc:
         raise UnsafeUrlError("域名无法解析") from exc
     addresses = {info[4][0].split("%", 1)[0] for info in infos}
-    if not addresses or not all(_is_public(address) for address in addresses):
+    if not addresses or not all(_is_public(address) and ipaddress.ip_address(address).is_global for address in addresses):
         raise UnsafeUrlError("不允许访问内网或保留地址")
     return parsed.geturl()
 

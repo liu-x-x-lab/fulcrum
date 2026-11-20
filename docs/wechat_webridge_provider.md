@@ -72,6 +72,13 @@ Downstream frames are limited to 10 MiB; media bytes use HTTP upload. Failed sen
 or disconnects do not automatically replay claimed commands, because an external
 action may already have happened. Verify uncertain results before retrying.
 
+For ordinary Douyin parser videos, the phone receives the playback URL and
+the size limit saved in the plugin's sending settings (default: 100 MiB).
+Changes apply to new replies without restarting the service. Fulcrum does not
+fetch the video. When the phone explicitly rejects a video larger than the
+limit recorded on that command, a link card is queued once for the same
+conversation. A timeout or an unrelated failure does not trigger a card.
+
 ## Directory synchronization
 
 Member join, leave and group-nickname events update the directory after inbound

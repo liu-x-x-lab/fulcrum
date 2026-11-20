@@ -22,6 +22,11 @@ def group_plugin_scope_enabled(binding: BotPlugin, scope: GroupPluginScope | Non
 def plugin_group_conversation_enabled(db: Session, *, channel: Channel, conversation: Conversation, plugin_code: str) -> bool:
     """定时和异步出站也必须遵守群插件设置，不能绕过消息入口。"""
 
+    # 视频与超限卡片异步领取，停用或卸载解析插件后不能补发到群聊或私聊。
+    if plugin_code == "douyin_parser":
+        plugin = db.scalar(select(Plugin).where(Plugin.code == plugin_code))
+        if plugin is None or plugin.platform_status != "active" or plugin.missing_at is not None:
+            return False
     # AI 核心和内置群功能有各自的设置入口，不属于可绑定的目录插件。
     if conversation.chat_type != "group" or not plugin_code or plugin_code == "ai_dispatch" or plugin_code.startswith("group_feature:"):
         return True

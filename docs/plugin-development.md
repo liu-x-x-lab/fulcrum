@@ -174,6 +174,13 @@ choose channel delivery; do not construct protocol XML or call channel clients.
 Distinguish missing context/configuration, invalid input, empty results,
 upstream failure and timeout; failed side effects must not report success.
 
+For WeBridge, `video_reply(video_url=playback_url)` sends a native video
+command using the public HTTP(S) address, without downloading or storing the
+video on Fulcrum. Use the trusted `request.context.channel_type` to select this
+form. The phone must be able to fetch the URL without server-side headers.
+Do not pass video bytes, a cover or a duration with `video_url`. The existing
+`video_base64` and `cover_base64` form is unchanged.
+
 ## Common services and tenant boundaries
 
 Use the platform tenant session and trusted context for business data. New

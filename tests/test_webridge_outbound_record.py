@@ -18,9 +18,10 @@ import pytest
 from sqlalchemy import select
 
 from app.core.time import now_shanghai
-from app.models.entities import Conversation, Message, TaskJob
-from app.services import plugin_directory
-from app.services.plugin_runtime.replies import music_reply
+from app.models.entities import BotPlugin, Conversation, Message, Plugin, TaskJob
+from app.services import outbound_files, plugin_directory
+from app.services.plugin_runtime.replies import PluginReplyError, music_reply, video_reply
+from app.services.safe_fetch import UnsafeUrlError
 from app.services.wechat_webridge import service
 from tests.test_ai_chat import _session
 from tests.test_ai_dispatch import _seed
@@ -33,6 +34,10 @@ def env():
     db = _session()
     channel = _seed(db)
     channel.runtime_info_json = json.dumps({"webridge": IDENTITY})
+    parser = Plugin(code="douyin_parser", display_name="抖音解析")
+    db.add(parser)
+    db.flush()
+    db.add(BotPlugin(tenant_id=1, bot_id=channel.bot_id, plugin_id=parser.id, status="enabled"))
     conversation = Conversation(id=3, tenant_id=1, bot_id=1, channel_id=channel.id, channel_type="wechat_webridge", external_id="1@chatroom", chat_type="direct")
     db.add(conversation)
     db.commit()
@@ -60,6 +65,12 @@ def _request_id(job: TaskJob) -> str:
     return json.loads(job.payload_json)["command"]["request_id"]
 
 
+def _video_context(plugin_code, channel, conversation):
+    return SimpleNamespace(plugin_code=plugin_code, channel_type=channel.channel_type, normalized_event={},
+                           binding_config={}, conversation_id=conversation.id, message_type="text", sender_id="demo",
+                           conversation_external_id=conversation.external_id, chat_type=conversation.chat_type)
+
+
 def test_auto_reply_leaves_an_outbound_message_record_linked_to_the_command(env) -> None:
     db, channel, conversation = env
     result = _auto_reply(db, channel, conversation, "签到成功，积分 +5")
@@ -85,6 +96,134 @@ def test_unsupported_payload_still_leaves_a_failed_record_and_reports_the_error(
     result = plugin_directory._dispatch_auto_outbound_messages(db, SimpleNamespace(channel_id=channel.id), context, output)[0]
     assert result["ok"] is False and "unsupported" in result["error"]
     assert db.get(Message, result["message_id"]).status == "failed"
+
+
+@pytest.mark.parametrize("plugin_code", ["clips", "douyin_parser"])
+def test_plugin_remote_video_reaches_webridge_poll_without_file(env, tmp_path, monkeypatch, plugin_code):
+    db, channel, conversation = env
+    url = "https://media.example.org/play/?id=12&sig=a%2Fb%3D"
+    ctx = _video_context(plugin_code, channel, conversation)
+    monkeypatch.setattr(outbound_files, "OUTBOUND_FILE_ROOT", tmp_path)
+    # 只模拟 DNS 和无关的设备维护；任务入库、领取与参数映射走真实代码。
+    with patch("app.services.safe_fetch.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]):
+        result, = plugin_directory._dispatch_auto_outbound_messages(
+            db, SimpleNamespace(channel_id=channel.id), ctx, {"replies": [video_reply(video_url=url)]})
+    assert result["queued"]
+    message = db.get(Message, result["message_id"])
+    assert (message.message_type, message.external_status) == ("video", "pending")
+    with patch.object(service, "_poll_maintenance"):
+        command, = service.claim_commands(db, channel, IDENTITY)
+    assert command["command_name"] == "send_video_from_url"
+    expected = {"max_size_mb": 100} if plugin_code == "douyin_parser" else {}
+    assert command["args"] == {"receiver": conversation.external_id, "source": url, **expected}
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(("plugin_code", "error", "expect_card"), [
+    ("douyin_parser", "video exceeds max_size_bytes limit (104857601 > 104857600)", True),
+    ("douyin_parser", "video exceeds max_size_bytes limit (104857600 > 104857600)", False),
+    ("douyin_parser", "video exceeds max_size_bytes limit (11546502 > 10485760)", False),
+    ("douyin_parser", "download timed out", False),
+    ("clips", "video exceeds max_size_bytes limit (104857601 > 104857600)", False),
+])
+def test_remote_video_size_receipt(env, plugin_code, error, expect_card):
+    db, channel, conversation = env
+    conversation.chat_type = "group"
+    url = "https://media.example.org/play/?sig=a%2Fb"
+    ctx = _video_context(plugin_code, channel, conversation)
+    with patch("app.services.safe_fetch.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]), \
+         patch.object(service, "_poll_maintenance"):
+        result, = plugin_directory._dispatch_auto_outbound_messages(db, SimpleNamespace(channel_id=channel.id), ctx, {
+            "title": "测试作品", "author": "作者", "replies": [video_reply(video_url=url)]})
+        first, = service.claim_commands(db, channel, IDENTITY)
+        receipt = {**IDENTITY, "request_id": first["request_id"], "ok": False, "result": {"error": error}}
+        assert service.accept_command_result(db, channel, receipt)["status"] == "failed"
+        assert service.accept_command_result(db, channel, receipt)["deduplicated"]
+        commands = service.claim_commands(db, channel, IDENTITY)
+        message = db.get(Message, result["message_id"])
+        if expect_card:
+            card, = commands
+            assert card["command_name"] == "send_link_card" and card["request_id"] != first["request_id"]
+            assert card["args"] == {"receiver": conversation.external_id, "url": url,
+                                    "title": "作者", "description": "测试作品", "thumb_url": ""}
+            assert (message.message_type, message.external_status) == ("link", "pending")
+            service.accept_command_result(db, channel, {**IDENTITY, "request_id": card["request_id"], "ok": True,
+                                                        "result": {"message_id": "native-card"}})
+            assert (message.external_status, message.external_message_id) == ("sent", "native-card")
+            assert not service.claim_commands(db, channel, IDENTITY)
+        else:
+            assert not commands
+            assert (message.message_type, message.external_status) == ("video", "failed")
+
+
+def test_pending_size_card_obeys_group_plugin_disable(env):
+    db, channel, conversation = env
+    conversation.chat_type = "group"
+    ctx = _video_context("douyin_parser", channel, conversation)
+    with patch("app.services.safe_fetch.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]), \
+         patch.object(service, "_poll_maintenance"):
+        result, = plugin_directory._dispatch_auto_outbound_messages(db, SimpleNamespace(channel_id=channel.id), ctx, {
+            "replies": [video_reply(video_url="https://media.example.org/demo")]})
+        cmd, = service.claim_commands(db, channel, IDENTITY)
+        service.accept_command_result(db, channel, {**IDENTITY, "request_id": cmd["request_id"], "ok": False,
+            "error": "video exceeds max_size_bytes limit (104857601 > 104857600)"})
+        parser = db.scalar(select(Plugin).where(Plugin.code == "douyin_parser"))
+        parser.platform_status = "disabled"
+        db.commit()
+        assert not service.claim_commands(db, channel, IDENTITY)
+        message = db.get(Message, result["message_id"])
+        assert (message.message_type, message.external_status) == ("link", "failed")
+
+
+def test_plain_outbound_json_cannot_enable_douyin_video_policy(env):
+    db, channel, conversation = env
+    url = "https://media.example.org/video"
+    job = service.enqueue_message_command(db, channel, conversation, {"message_type": "video", "video_url": url,
+                                                                      "oversize_card": {"title": "foreign"}})
+    payload = json.loads(job.payload_json)
+    assert payload["command"]["params"] == {"source": url, "receiver": conversation.external_id}
+    assert "oversize_card" not in payload and "plugin_code" not in payload
+
+
+def test_saved_plugin_limit_is_snapshotted_per_command(env):
+    from app.services.plugin_schemas import build_plugin_config_view, merge_schema_config
+
+    db, channel, conversation = env
+    ctx = _video_context("douyin_parser", channel, conversation)
+    fields = {f["name"]: f for f in build_plugin_config_view("douyin_parser", None)["fields"]}
+    key = "webridge_video_limit_mib"
+    assert fields[key]["default"] == 100 and fields[key]["minimum"] == 1
+    assert fields["dtk_api_key"]["sensitive"] and {"download_mode", "keywords", "require_mention"} <= fields.keys()
+    with patch("app.services.safe_fetch.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]), \
+         patch.object(service, "_poll_maintenance"):
+        commands = []
+        for value in ("12.5", "200"):
+            saved = merge_schema_config("douyin_parser", {f"schema__{key}": value})
+            ctx.binding_config = json.loads(saved.config_json)
+            plugin_directory._dispatch_auto_outbound_messages(db, SimpleNamespace(channel_id=channel.id), ctx, {
+                "replies": [video_reply(video_url="https://media.example.org/video")]})
+            command, = service.claim_commands(db, channel, IDENTITY)
+            assert command["args"]["max_size_mb"] == float(value)
+            commands.append(command)
+        # 当前配置已改成 200，第一条仍按其 12.5 MiB 回报转卡片，第二条不受影响。
+        for command in commands:
+            service.accept_command_result(db, channel, {**IDENTITY, "request_id": command["request_id"], "ok": False,
+                "error": "video exceeds max_size_bytes limit (13107201 > 13107200)"})
+        card, = service.claim_commands(db, channel, IDENTITY)
+        assert card["command_name"] == "send_link_card"
+
+
+def test_remote_video_rejects_invalid_sources_and_unsupported_channel():
+    url = "https://media.example.org/play/"
+    for invalid in ({"video_url": "file:///clip.mp4"}, {"video_url": "https://user:pass@media.example.org/"},
+                    {"video_url": url, "base64": "QQ=="}):
+        with pytest.raises(PluginReplyError):
+            plugin_directory._normalize_reply_item({"type": "video", **invalid}, channel_type="wechat_webridge")
+    with pytest.raises(PluginReplyError):
+        plugin_directory._normalize_reply_item(video_reply(video_url=url), channel_type="wechat_ipad")
+    with patch("app.services.safe_fetch.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("127.0.0.1", 443))]):
+        with pytest.raises(UnsafeUrlError):
+            plugin_directory._normalize_reply_item(video_reply(video_url=url), channel_type="wechat_webridge")
 
 
 def test_phone_result_settles_the_message_status(env) -> None:

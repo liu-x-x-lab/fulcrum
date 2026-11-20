@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from app.services.plugin_runtime.contracts import PluginExecutionRequest
+from app.services.plugin_runtime.contracts import PluginExecutionContext, PluginExecutionRequest
 from app.services.plugin_runtime.http_client import PluginHttpError, PluginHttpResponse
 from plugins.douyin_parser import parsers as parse
 from plugins.douyin_parser import plugin, service
@@ -235,6 +235,48 @@ def test_file_mode_sends_remote_file_without_downloading() -> None:
     replies = service.build_replies(client, _short_video(300), download_mode="file", timeout_seconds=10)
     assert replies == [{"type": "file", "file_name": "作者 - 标题.mp4", "file_url": "https://m.test/v.mp4"}]
     assert not client.calls
+
+
+@pytest.mark.parametrize(("channel", "duration_ms", "mode", "kind"), [
+    ("wechat_webridge", 5000, "card", "video"),
+    ("wechat_webridge", 600000, "card", "video"),
+    ("wechat_webridge", None, "card", "video"),
+    ("wechat_webridge", 600000, "file", "file"),
+    ("wechat_ipad", 600000, "card", "link"),
+    ("wechat_gugatool", 600000, "card", "link"),
+])
+def test_parsed_video_url_delivery(monkeypatch, channel, duration_ms, mode, kind):
+    url = "https://media.example.org/play/?id=12&sig=a%2Fb%3D"
+    data = {"content_kind": "video", "duration_ms": duration_ms,
+            "video": {"play_url": url, "cover_url": "https://media.example.org/cover.jpg"}}
+    client = FakeClient({"/api/v1/parse": _dtk_ok(data)})
+    monkeypatch.setattr(plugin, "PluginHttpClient", lambda: client)
+    result = plugin.execute_action(PluginExecutionRequest(
+        action="execute", config={"download_mode": mode, "dtk_api_url": "https://dtk.test", "dtk_api_key": "test"},
+        context=PluginExecutionContext(tenant_id=1, bot_id=1, binding_id=1, channel_type=channel),
+        payload={"content": "https://v.douyin.com/x/", "channel_type": "wechat_webridge"},
+    ))
+    assert result.ok
+    reply, = result.output["replies"]
+    assert reply["type"] == kind
+    if kind == "video":
+        assert reply == {"type": "video", "video_url": url}
+    else:
+        assert reply.get("file_url", reply.get("url")) == url
+    # 只查作品元数据；有封面也不发 GET/HEAD 探测或下载签名地址。
+    assert [call[0] for call in client.calls] == ["POST"]
+
+
+def test_webridge_invalid_playback_url_does_not_trigger_a_download(monkeypatch):
+    client = FakeClient({"/api/v1/parse": _dtk_ok({"content_kind": "video", "play_url": "file:///video.mp4"})})
+    monkeypatch.setattr(plugin, "PluginHttpClient", lambda: client)
+    result = plugin.execute_action(PluginExecutionRequest(
+        action="execute", config={"dtk_api_url": "https://dtk.test", "dtk_api_key": "test"},
+        context=PluginExecutionContext(tenant_id=1, bot_id=1, binding_id=1, channel_type="wechat_webridge"),
+        payload={"content": "https://v.douyin.com/x/"},
+    ))
+    assert not result.ok and "播放地址无效" in result.message
+    assert [call[0] for call in client.calls] == ["POST"]
 
 
 def _note(count: int):

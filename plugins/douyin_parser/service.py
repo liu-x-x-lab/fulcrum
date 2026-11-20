@@ -5,8 +5,8 @@
    所有请求都走平台 PluginHttpClient,受响应体上限、重定向上限和总时限约束。
 二、发送策略:
    - 图文: 先发作者与文案;实况页发视频加封面,普通页发图片;普通图超过 3 张时纵向合并分页。
-   - 视频: download_mode=file 时发文件;默认只有时长明确且不超过 20 秒才下载直发,
-     其余(长视频、时长未知、下载失败)统一发链接卡片。
+   - 视频: file 模式发文件;默认模式下微桥直接使用播放地址,其他渠道仅在时长明确且不超过
+     20 秒时尝试下载直发,其余发链接卡片。
 """
 
 from __future__ import annotations
@@ -292,11 +292,15 @@ def build_replies(
     *,
     download_mode: str,
     timeout_seconds: float,
+    use_video_url: bool = False,
 ) -> list[dict[str, Any]]:
     """入口:按媒资类型生成回复列表,总数不超过平台单次上限。"""
 
     if media.get("type") == "image":
         return _note_replies(client, media, timeout_seconds)
+    if use_video_url:
+        # 手机从解析出的地址取视频并生成封面，不走服务端短视频下载或长视频卡片分支。
+        return [video_reply(video_url=str(media.get("url") or ""))]
     return _video_replies(client, media, download_mode, timeout_seconds)
 
 

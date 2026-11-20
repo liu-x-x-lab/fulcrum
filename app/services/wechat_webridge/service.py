@@ -23,6 +23,7 @@ from app.services.task_queue import complete_job, enqueue_job, fail_job_terminal
 from app.core.logging import get_logger
 
 from .contract import COMMAND_GROUPS, COMMANDS, JOB_TYPE, as_object, identity_from_payload, text
+from . import video_size
 
 logger = get_logger(__name__)
 
@@ -476,7 +477,8 @@ def accept_state(db: Session, channel: Channel, payload: dict[str, Any]) -> dict
 
 
 
-def enqueue_message_command(db: Session, channel: Channel, conversation: Conversation, payload: dict[str, Any]) -> TaskJob:
+def enqueue_message_command(db: Session, channel: Channel, conversation: Conversation, payload: dict[str, Any],
+                            *, plugin_code: str = "") -> TaskJob:
     """把统一消息类型映射为 WeBridge 原生命令，供普通出站接口直接使用。"""
 
     message_type = text(payload.get("message_type") or "text").lower()
@@ -510,6 +512,7 @@ def enqueue_message_command(db: Session, channel: Channel, conversation: Convers
     if not command_type:
         raise ValueError(f"webridge_message_type_unsupported:{message_type}")
     params: dict[str, Any] = {"receiver": receiver}
+    job_options: dict[str, Any] = {"plugin_code": plugin_code} if plugin_code else {}
     if message_type == "text":
         params["content"] = str(payload.get("content") or payload.get("text") or "").strip()
         # 引用回复和 @ 是微桥 send_message 的原生能力：只在上游明确给出时透传，
@@ -532,6 +535,11 @@ def enqueue_message_command(db: Session, channel: Channel, conversation: Convers
     elif message_type in {"voice", "video"}:
         # 语音、视频用 source(本地路径或远程 URL);大文件不能走 base64,统一传文件地址。
         params["source"] = payload.get("voice_url") or payload.get("video_url")
+        if message_type == "video" and params["source"] and isinstance(payload.get("oversize_card"), video_size.OversizeCard):
+            params["max_size_mb"] = payload["oversize_card"]["max_size_mb"]
+            # 卡片资料留在本地任务，手机只收到原始地址和大小上限。
+            job_options["oversize_card"] = payload["oversize_card"]
+            job_options["plugin_code"] = "douyin_parser"
     elif message_type == "file":
         params["file_url"] = payload.get("file_url") or payload.get("file_path")
     elif message_type == "emoji":
@@ -556,7 +564,7 @@ def enqueue_message_command(db: Session, channel: Channel, conversation: Convers
         params["xml"] = payload.get("xml") or payload.get("cdn_xml") or payload.get("content") or ""
     if not any(value not in (None, "") for key, value in params.items() if key != "receiver"):
         raise ValueError("webridge_message_payload_missing")
-    return enqueue_job(db, job_type=JOB_TYPE, payload={"channel_id": int(channel.id), "conversation_id": int(conversation.id), "command": {"request_id": f"job_{uuid.uuid4().hex}", "type": command_type, "params": params}}, priority=90, related_type="conversation", related_id=int(conversation.id))
+    return enqueue_job(db, job_type=JOB_TYPE, payload={"channel_id": int(channel.id), "conversation_id": int(conversation.id), **job_options, "command": {"request_id": f"job_{uuid.uuid4().hex}", "type": command_type, "params": params}}, priority=90, related_type="conversation", related_id=int(conversation.id))
 
 def build_upload_url(channel: Channel, attachment_id: int) -> str:
     """手机回传媒体文件的地址:渠道配置里有 upload_url 就用它(相对地址补成渠道绝对地址),否则用渠道的 /agent/upload_media。
@@ -850,14 +858,17 @@ def claim_commands(db: Session, channel: Channel, payload: dict[str, Any], limit
         if channel.is_enabled is False and text(as_object(data.get("command")).get("type")) not in {"account_status", "device_status"}:
             continue
         if cancel_disallowed_plugin_outbound_job(db, channel=channel, job=job, payload=data):
+            if data.get("plugin_code") == "douyin_parser":
+                settle_outbound_message(db, job, ok=False, error=job.error_message)
             continue
         # 排队期间也可能跨过两分钟，过期撤回不再发给手机执行。
         if data.get("revoke_message_id") and int(data.get("revoke_expires_at") or 0) <= int(current.timestamp() * 1000):
             settle_outbound_message(db, job, ok=False, error="消息已超过 2 分钟，无法撤回")
             fail_job_terminal(db, job, error_message="消息已超过 2 分钟，无法撤回", result={})
             continue
-        if job.related_type in {"webridge_friend_check", "webridge_friend_action"}:
-            # 好友任务可能在读取候选后超时，原子领取防止将终态复活或重复执行删除、备注。
+        if (job.related_type in {"webridge_friend_check", "webridge_friend_action"}
+                or data.get("plugin_code") == "douyin_parser"):
+            # 原子领取防止并发 poll 重复执行好友操作、视频或超限卡片。
             claimed = db.execute(update(TaskJob).where(
                 TaskJob.id == job.id,
                 TaskJob.tenant_id == channel.tenant_id,
@@ -1148,7 +1159,10 @@ def accept_command_result(db: Session, channel: Channel, payload: dict[str, Any]
             job.status = "failed"
             db.flush()
             member_directory.after_result(db, channel, text(as_object(failed_command.get("params")).get("room_id")), complete=False)
-        settle_outbound_message(db, job, ok=False, error=command_error)
+        transferred = (payload.get("ok") is False and stored_request_id == request_id and
+                       video_size.queue_card_if_oversize(db, channel, job, data, command_error))
+        if not transferred:
+            settle_outbound_message(db, job, ok=False, error=command_error)
         fail_job_terminal(db, job, error_message=command_error, result={"webridge": payload})
         if command_type == "room_member_join_info":
             invitation_sync.after_result(db, channel, job)

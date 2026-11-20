@@ -2,7 +2,7 @@
 code = "douyin_parser"
 display_name = "抖音解析"
 plugin_type = "rule"
-version = "3.0.0"
+version = "3.2.0"
 author = "abot"
 description = "解析抖音视频与图文(含实况),优先使用 DTK 解析服务,失败回退官方接口"
 default_enabled = false
@@ -28,7 +28,70 @@ fields = ["dtk_api_key"]
 dtk_api_url = "https://dy.functen.com"
 dtk_api_key = ""
 dtk_wait_seconds = 15
-# 视频发送方式: card=短视频直发/长视频卡片, file=发送视频文件
+# 默认模式: 微桥按播放地址发视频,其他渠道短视频直发/长视频卡片;file=发送视频文件
 download_mode = "card"
+webridge_video_limit_mib = 100
 # 一次解析加下载的整体时限(秒),必须小于 timeout_ms
 timeout_seconds = 25
+
+[[config.fields]]
+key = "webridge_video_limit_mib"
+label = "微桥视频直发上限（MiB）"
+kind = "number"
+default = 100
+min = 1
+group = "发送设置"
+hint = "普通视频超过此大小时发送链接卡片，文件模式不受影响。"
+
+[[config.fields]]
+key = "download_mode"
+label = "发送模式"
+kind = "select"
+options = [{ value = "card", label = "默认" }, { value = "file", label = "发送文件" }]
+default = "card"
+group = "发送设置"
+
+[[config.fields]]
+key = "dtk_api_url"
+label = "解析服务地址"
+kind = "url"
+default = "https://dy.functen.com"
+group = "解析服务"
+
+[[config.fields]]
+key = "dtk_api_key"
+label = "解析服务密钥"
+kind = "secret"
+group = "解析服务"
+
+[[config.fields]]
+key = "dtk_wait_seconds"
+label = "服务等待时间（秒）"
+kind = "number"
+default = 15
+min = 3
+max = 30
+group = "解析服务"
+
+[[config.fields]]
+key = "timeout_seconds"
+label = "解析超时（秒）"
+kind = "number"
+default = 25
+min = 5
+max = 28
+group = "解析服务"
+
+[[config.fields]]
+key = "keywords"
+label = "匹配关键词"
+kind = "tags"
+default = ["douyin.com", "iesdouyin.com"]
+group = "匹配设置"
+
+[[config.fields]]
+key = "require_mention"
+label = "需要 @ 机器人"
+kind = "bool"
+default = false
+group = "匹配设置"
