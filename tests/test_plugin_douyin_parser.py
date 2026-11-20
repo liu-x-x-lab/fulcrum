@@ -17,7 +17,8 @@ from PIL import Image
 from app.services.plugin_runtime.contracts import PluginExecutionContext, PluginExecutionRequest
 from app.services.plugin_runtime.http_client import PluginHttpError, PluginHttpResponse
 from plugins.douyin_parser import parsers as parse
-from plugins.douyin_parser import plugin, service
+from plugins.douyin_parser import plugin, render, service
+from urllib.parse import quote
 
 
 def _jpeg(width: int = 100, height: int = 50, fmt: str = "JPEG") -> bytes:
@@ -136,6 +137,105 @@ def _dtk_ok(data):
     return _resp({"success": True, "data": data})
 
 
+RENDER_DETAIL = {
+    "desc": "渲染视频",
+    "authorInfo": {"nickname": "渲染作者"},
+    "video": {
+        "duration": 625987,
+        "uri": "v0200abc",
+        "playAddr": [{"src": "https://v.test/p.mp4"}],
+        "coverUrlList": ["https://c.test/c.jpg"],
+    },
+}
+
+
+def _render_page(detail):
+    payload = quote(json.dumps({"app": {"videoDetail": detail}}, ensure_ascii=False))
+    return f'<html><script id="RENDER_DATA" type="application/json">{payload}</script></html>'
+
+
+def test_render_detail_maps_video_and_note() -> None:
+    media = render.media_from_render_detail(RENDER_DETAIL)
+    assert media["type"] == "video"
+    assert media["url"] == "https://aweme.snssdk.com/aweme/v1/play/?video_id=v0200abc&ratio=720p&line=0"
+    assert media["cover"] == "https://c.test/c.jpg"
+    assert media["duration_seconds"] == 625.987
+    assert media["title"] == "渲染视频" and media["author"] == "渲染作者"
+
+    note = render.media_from_render_detail(
+        {
+            "desc": "渲染图文",
+            "authorInfo": {"nickname": "图文作者"},
+            "images": [{"urlList": ["https://i.test/1.webp", "https://i.test/1.jpg"]}],
+        }
+    )
+    assert note["type"] == "image" and len(note["note_pages"]) == 1
+    assert note["note_pages"][0]["image_candidates"][0] == "https://i.test/1.jpg"
+
+
+def test_missing_dtk_falls_back_to_render(monkeypatch) -> None:
+    monkeypatch.setattr(render, "_sign", lambda nonce: "x" * 47)
+    client = FakeClient(
+        {
+            "user/self": _resp(_render_page(RENDER_DETAIL).encode(), content_type="text/html"),
+            "v.douyin.com": _resp(
+                b"<html></html>",
+                content_type="text/html",
+                url="https://www.douyin.com/video/7707873015090380131",
+            ),
+            "https://www.douyin.com/": _resp(
+                b"",
+                content_type="text/html",
+                headers={"set-cookie": "__ac_nonce=abc123; Path=/"},
+            ),
+        }
+    )
+    media = service.parse_media(
+        client,
+        "https://v.douyin.com/x/",
+        dtk_api_url="https://dtk.test",
+        dtk_api_key="",
+        dtk_wait_seconds=15,
+        deadline=time.monotonic() + 30,
+    )
+    assert media["type"] == "video" and media["author"] == "渲染作者"
+    assert media["page_url"] == "https://www.douyin.com/video/7707873015090380131"
+    assert not any("/api/v1/parse" in call[1] for call in client.calls)
+    assert any("user/self" in call[1] for call in client.calls)
+
+
+def test_dtk_failure_falls_back_to_render(monkeypatch) -> None:
+    monkeypatch.setattr(render, "_sign", lambda nonce: "x" * 47)
+    client = FakeClient(
+        {
+            "/api/v1/parse": _resp({"success": False, "error": {"code": "BUSY"}}, status=500),
+            "user/self": _resp(_render_page(RENDER_DETAIL).encode(), content_type="text/html"),
+            "v.douyin.com": _resp(
+                b"<html></html>",
+                content_type="text/html",
+                url="https://www.douyin.com/video/7707873015090380131",
+            ),
+            "https://www.douyin.com/": _resp(
+                b"",
+                content_type="text/html",
+                headers={"set-cookie": "__ac_nonce=abc123; Path=/"},
+            ),
+        }
+    )
+    media = service.parse_media(
+        client,
+        "https://v.douyin.com/x/",
+        dtk_api_url="https://dtk.test",
+        dtk_api_key="k",
+        dtk_wait_seconds=15,
+        deadline=time.monotonic() + 30,
+    )
+    assert media["type"] == "video" and media["author"] == "渲染作者"
+    assert any("/api/v1/parse" in call[1] for call in client.calls)
+    # 降级成功后不再走自有解析的 detail 接口。
+    assert not any("aweme/detail" in call[1] for call in client.calls)
+
+
 def test_dtk_success_skips_local_parsing() -> None:
     client = FakeClient({"/api/v1/parse": _dtk_ok({"raw": VIDEO_AWEME})})
     media = service.parse_media(
@@ -222,7 +322,7 @@ def test_long_or_unknown_duration_falls_back_to_link_card(duration) -> None:
     client = _media_client()
     replies = service.build_replies(client, _short_video(duration), download_mode="card", timeout_seconds=10)
     assert replies[0]["type"] == "link" and replies[0]["title"] == "作者" and replies[0]["description"] == "标题"
-    assert not client.calls  # 不下载视频
+    assert not client.calls  # 不下载视频,也不额外下载封面
 
 
 def test_short_video_download_failure_falls_back_to_link_card() -> None:
@@ -230,11 +330,34 @@ def test_short_video_download_failure_falls_back_to_link_card() -> None:
     assert replies[0]["type"] == "link"
 
 
-def test_file_mode_sends_remote_file_without_downloading() -> None:
-    client = _media_client()
+def test_file_mode_sends_the_declared_file_without_probing_size() -> None:
+    """显式 file 模式不在插件里探测远端大小；超限由平台侧处理。"""
+
+    client = FakeClient({})  # 任何探测都会落到这里并记录调用
     replies = service.build_replies(client, _short_video(300), download_mode="file", timeout_seconds=10)
     assert replies == [{"type": "file", "file_name": "作者 - 标题.mp4", "file_url": "https://m.test/v.mp4"}]
     assert not client.calls
+
+
+@pytest.mark.parametrize("channel", ("wechat_webridge", "wechat_gugatool", "wechat_ipad"))
+def test_file_mode_keeps_the_same_reply_on_every_channel(monkeypatch, channel) -> None:
+    """file 模式不按渠道改道；长视频也直接给文件地址，由渠道自行处理超限。"""
+
+    url = "https://media.example.org/play/?id=12&sig=a%2Fb%3D"
+    data = {"content_kind": "video", "duration_ms": 600000,
+            "video": {"play_url": url, "cover_url": "https://media.example.org/cover.jpg"}}
+    client = FakeClient({"/api/v1/parse": _dtk_ok(data)})
+    monkeypatch.setattr(plugin, "PluginHttpClient", lambda: client)
+    result = plugin.execute_action(PluginExecutionRequest(
+        action="execute", config={"download_mode": "file", "dtk_api_url": "https://dtk.test", "dtk_api_key": "test"},
+        context=PluginExecutionContext(tenant_id=1, bot_id=1, binding_id=1, channel_type=channel),
+        payload={"content": "https://v.douyin.com/x/", "channel_type": channel},
+    ))
+    assert result.ok
+    reply, = result.output["replies"]
+    assert reply["type"] == "file" and reply["file_url"] == url
+    # 只查作品元数据；不探测播放地址大小。
+    assert [call[0] for call in client.calls] == ["POST"]
 
 
 def test_work_page_is_used_only_for_cards():

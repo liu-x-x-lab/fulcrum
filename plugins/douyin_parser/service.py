@@ -1,6 +1,7 @@
-"""抖音解析服务:取媒资(DTK 优先、自有解析兜底)并按媒资类型生成平台标准回复。
+"""抖音解析服务:取媒资(DTK 优先、网页渲染降级)并按媒资类型生成平台标准回复。
 
-一、解析来源:DTK 自建服务优先;未配置、失败或无有效媒资时回退到自有解析:
+一、解析来源:DTK 自建服务优先;未配置或失败时降级到网页渲染解析
+   (__ac_signature 签名 + 作品页 RENDER_DATA),再失败才回退到自有解析:
    展开短链取分享页 -> 官方 detail 接口(a_bogus 签名)-> 分享页 HTML -> slidesinfo 接口。
    所有请求都走平台 PluginHttpClient,受响应体上限、重定向上限和总时限约束。
 二、发送策略:
@@ -73,7 +74,7 @@ def parse_media(
     dtk_wait_seconds: int,
     deadline: float,
 ) -> dict[str, Any]:
-    """按 DTK、自有解析的固定顺序取媒资;两条都失败才抛错,不使用任何第三方兜底。"""
+    """DTK 优先;未配置或失败时降级到网页渲染解析,最后尝试自有解析。"""
 
     reasons: list[str] = []
     if dtk_api_url and dtk_api_key:
@@ -81,11 +82,25 @@ def parse_media(
             return _from_dtk(client, share_url, dtk_api_url, dtk_api_key, dtk_wait_seconds, deadline)
         except (SourceError, PluginHttpError, ValueError) as exc:
             reasons.append(f"DTK:{exc}")
+    else:
+        reasons.append("DTK:未配置")
+    try:
+        return _from_render(client, share_url, deadline)
+    except (PluginHttpError, ValueError) as exc:
+        reasons.append(f"页面解析:{exc}")
     try:
         return _from_local(client, share_url, deadline)
     except (SourceError, PluginHttpError, ValueError) as exc:
         reasons.append(f"自有解析:{exc}")
     raise SourceError("; ".join(reasons))
+
+
+def _from_render(client: PluginHttpClient, share_url: str, deadline: float) -> dict[str, Any]:
+    """网页渲染解析按需加载 V8 签名组件，避免所有执行都依赖原生库。"""
+
+    from plugins.douyin_parser.render import parse_render_media
+
+    return parse_render_media(client, share_url, deadline=deadline)
 
 
 def _remaining(deadline: float, cap: float) -> float:
