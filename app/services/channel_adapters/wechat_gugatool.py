@@ -575,6 +575,8 @@ class WechatGugatoolAdapter(BaseChannelAdapter):
         local_message_id = self._coerce_int(item.get("localMessageID"))
         server_message_id = self._coerce_int(item.get("serverMessageID"))
         message_source = str(item.get("messageSource") or "")
+        from app.services.maibot_wechat import source_mentions
+
         quote_payload = parse_quote_payload(raw_content) if kind != "revoke" else None
         if quote_payload:
             # 引用消息(微信 appmsg type=57)按文本入库:正文只留回复内容,
@@ -608,6 +610,7 @@ class WechatGugatoolAdapter(BaseChannelAdapter):
             "member_profile": None,
             # 群里 @ 自己（或 @所有人）时置位，插件与 AI 调度据此判断是否被点名。
             "mentioned_self": self._is_self_mentioned(message_source, to_user),
+            "mention_user_list": source_mentions(message_source),
         }
         if recalled is not None:
             # 撤回是消息状态更新,不交给插件和 AI 当成新发言处理。

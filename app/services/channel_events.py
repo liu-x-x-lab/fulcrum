@@ -623,6 +623,12 @@ def _inbound_snapshot(details: dict[str, Any]) -> str | None:
     quote = details.get("quote_payload")
     if isinstance(quote, dict) and quote:
         snapshot["quote"] = quote
+    mentions = details.get("mention_user_list")
+    if isinstance(mentions, list):
+        snapshot["mentions"] = [value for value in mentions[:20] if isinstance(value, str) and 0 < len(value) <= 128]
+    quote_id = details.get("quote_message_id")
+    if (isinstance(quote_id, str) or type(quote_id) is int) and 0 < len(str(quote_id)) <= 128:
+        snapshot["quote_id"] = str(quote_id)
     native: dict[str, int] = {}
     for source, target in (("local_message_id", "local"), ("server_message_id", "server")):
         value = details.get(source)
@@ -705,7 +711,7 @@ def _queue_inbound_media_fetch_if_needed(
         from app.services.wechat_webridge.service import build_upload_url, enqueue_media_upload_command
 
         upload_url = build_upload_url(channel, attachment.id)
-        enqueue_media_upload_command(
+        job = enqueue_media_upload_command(
             db,
             channel=channel,
             conversation=conversation,
@@ -715,7 +721,7 @@ def _queue_inbound_media_fetch_if_needed(
             attachment_id=attachment.id,
         )
     else:
-        enqueue_job(
+        job = enqueue_job(
             db,
             job_type=INBOUND_MEDIA_FETCH_JOB,
             payload={"attachment_id": attachment.id, "channel_id": channel.id},
@@ -723,6 +729,7 @@ def _queue_inbound_media_fetch_if_needed(
             related_type="message_attachment",
             related_id=attachment.id,
         )
+    attachment.metadata_json = json.dumps({**media_info, "upload_job_id": job.id, "requested_at": now_shanghai().isoformat()}, ensure_ascii=False)
 
 
 def _chatroom_auto_download_media_enabled(

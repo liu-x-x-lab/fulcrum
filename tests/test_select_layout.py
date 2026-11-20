@@ -69,7 +69,8 @@ def test_binding_dropdown_keeps_long_modal_layout_and_scroll_position(pages, bro
     client, ids, _plugin_id, _binding_id = pages
     _login(client, "admin")
     with ids["factory"]() as db:
-        plugin_id = db.scalar(select(Plugin.id).where(Plugin.code == "maibot_adapter"))
+        # MaiBot 已改为专用连接编辑器，绑定弹窗不再堆放旧传输参数。
+        plugin_id = db.scalar(select(Plugin.id).where(Plugin.code == "music"))
     response = client.get(f"/plugins/{plugin_id}")
     assert response.status_code == 200
     context = browser.new_context(viewport={"width": size[0], "height": size[1]}, reduced_motion="reduce")
@@ -157,6 +158,9 @@ def test_input_scroll_keeps_dropdown_open_and_ancestor_scroll_closes_it(browser,
         page.locator("#url").evaluate('node => node.dispatchEvent(new Event("scroll"))')
         playwright.expect(panel).to_be_visible()
         panel.evaluate('node => node.dispatchEvent(new Event("scroll"))')
+        playwright.expect(panel).to_be_visible()
+        # 菜单打开前的定位滚动可能延后派发；锚点没动时仍需保持展开。
+        page.evaluate('() => document.dispatchEvent(new Event("scroll"))')
         playwright.expect(panel).to_be_visible()
         page.locator("#container").evaluate('node => {node.scrollTop = 40}')
         playwright.expect(panel).to_be_hidden()

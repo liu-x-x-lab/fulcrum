@@ -70,7 +70,9 @@ def status(db: Session, message: Message) -> dict[str, Any]:
     if not job_id or not requested_at:
         return _result("none", attachment)  # 有记录但没人请求过(例如自动下载关闭时留下的)
     job = db.get(TaskJob, int(job_id))
-    if job is not None and job.status == "failed":
+    if job is None:
+        return _result("none", attachment)
+    if job.status in {"failed", "cancelled"}:
         mark_attachment_failed(db, attachment=attachment, error_message=(job.error_message or "手机没有传回文件")[:200])
         return _result("failed", attachment, attachment.last_error)
     started = ensure_shanghai_datetime(_parse(requested_at))

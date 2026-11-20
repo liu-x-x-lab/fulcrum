@@ -8,7 +8,7 @@ from typing import Any, Mapping
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.models.entities import Channel, Conversation, Message
+from app.models.entities import Channel, Conversation, Message, TaskJob
 from app.services.analytics import record_message_activity
 from app.services.message_state import refresh_conversation_last_message_at
 
@@ -34,6 +34,7 @@ def dispatch_outbound_message(
     payload: dict[str, Any],
     *,
     auto_revoke: Mapping[str, Any] | None = None,
+    maibot_dispatch: dict[str, Any] | None = None,
 ) -> tuple[Message, dict[str, Any]]:
     normalized_payload = _normalize_outbound_payload(channel, payload)
     logger.info(
@@ -64,6 +65,15 @@ def dispatch_outbound_message(
 
     adapter = get_channel_adapter(channel)
     adapter_result = adapter.send_message(channel, conversation, normalized_payload)
+    if maibot_dispatch is not None and adapter_result.get("ok") and channel.channel_type in {"wechat_webridge", "wechat_gugatool"}:
+        from app.services.task_queue import add_internal_job_fields
+
+        # The adapter creates the phone command in this transaction. Copy only
+        # worker-verified metadata, never fields from the public send payload.
+        command = db.get(TaskJob, adapter_result["job_id"])
+        if command is None:
+            raise RuntimeError("maibot_device_command_missing")
+        add_internal_job_fields(command, maibot_dispatch)
     _apply_adapter_result(message, adapter_result)
     from app.services.plugin_auto_revoke import confirm_outbound, queue, remember_outbound
 

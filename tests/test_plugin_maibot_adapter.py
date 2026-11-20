@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -21,7 +23,7 @@ os.environ["AUTH_SEED_DEMO_USERS"] = "false"
 from app.core.db import Base
 from app.core.tenant_context import tenant_scope
 from app.core.tenant_db import platform_session, tenant_session
-from app.models.entities import Bot, BotPlugin, Channel, Conversation, Message, Plugin, TaskJob
+from app.models.entities import Bot, BotPlugin, Channel, Chatroom, Conversation, GroupPluginScope, Message, Plugin, TaskJob
 from app.models.saas import Tenant
 from app.services.crud import toggle_binding
 from app.services.plugin_directory import get_discovered_plugin, load_directory_plugin
@@ -171,10 +173,11 @@ def test_maibot_adapter_declares_observer_and_tenant_connection_config() -> None
     assert discovered is not None and discovered.is_valid
     assert discovered.manifest.plugin_type == "observer"
     assert discovered.matcher.commands == ()
-    assert discovered.secret_fields == ("api_key",)
+    assert discovered.secret_fields == ("api_key", "connection_tokens")
     assert discovered.runtime_config["api_server_ws_url"] == ""
     assert discovered.runtime_config["collect_group_messages"] is True
     assert discovered.runtime_config["collect_private_messages"] is True
+    assert "protocol" not in discovered.runtime_config
     assert "api_key" not in discovered.runtime_config
     assert discovered.capability.consume_policy == "continue"
     assert "telegram" in discovered.capability.channel_types
@@ -186,7 +189,8 @@ def test_maibot_adapter_declares_observer_and_tenant_connection_config() -> None
     assert "global_client" not in source
 
 
-def test_maibot_adapter_submits_trusted_message_dimensions(maibot_fixture, monkeypatch) -> None:
+@pytest.mark.parametrize("protocol", ["maim", "legacy_api"])
+def test_maibot_adapter_submits_trusted_message_dimensions(maibot_fixture, monkeypatch, protocol) -> None:
     """插件只使用落库消息和内部会话令牌，不采信 payload 中的身份和目标。"""
 
     factory, identity = maibot_fixture
@@ -209,8 +213,10 @@ def test_maibot_adapter_submits_trusted_message_dimensions(maibot_fixture, monke
             return True
 
     monkeypatch.setattr(module, "maibot_client_registry", FakeRegistry())
+    request = _request(identity)
+    request = replace(request, config={**request.config, "protocol": protocol})
     with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
-        result = module.execute_message_action(db, _request(identity))
+        result = module.execute_message_action(db, request)
 
     assert result.ok is True and result.status == "completed"
     assert result.output == {"provider_status": "queued", "replies": []}
@@ -221,7 +227,7 @@ def test_maibot_adapter_submits_trusted_message_dimensions(maibot_fixture, monke
     api_message = captured["api_message"]
     assert api_message["message_segment"] == {"type": "text", "data": "今天发布进度如何？"}
     assert api_message["message_info"]["message_id"] == "maibot-message-real"
-    sender_info = api_message["message_info"]["sender_info"]
+    sender_info = api_message["message_info"] if protocol == "maim" else api_message["message_info"]["sender_info"]
     assert sender_info["user_info"] == {
         "platform": "multi-bot-saas",
         "user_id": f"mbs-user-{identity['channel_id']}-member-real-100",
@@ -236,6 +242,13 @@ def test_maibot_adapter_submits_trusted_message_dimensions(maibot_fixture, monke
     assert "forged-user" not in serialized
     assert "forged-room" not in serialized
     assert "999" not in serialized
+    if protocol == "maim":
+        assert api_message["account_id"] == f"mbs-channel-{identity['channel_id']}"
+        assert api_message["scope"] is None
+        assert "message_dim" not in api_message
+        assert "tenant-maibot-key" not in serialized
+    else:
+        assert api_message["message_dim"]["api_key"] == "tenant-maibot-key"
 
 
 def test_maibot_adapter_honors_collection_switches_before_connection(maibot_fixture, monkeypatch) -> None:
@@ -370,16 +383,17 @@ def test_maibot_reply_queues_only_the_client_validated_conversation(maibot_fixtu
     assert loaded is not None and loaded.instance is not None
     module = loaded.instance._module
     monkeypatch.setattr(module, "TenantSessionLocal", factory)
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        binding = db.get(BotPlugin, identity["binding_id"])
+        binding.config_json = json.dumps({**json.loads(binding.config_json), "protocol": "maim"})
+        db.commit()
     package = {
-        "type": "sys_std",
-        "msg_id": "reply-1",
-        "payload": {
-            "message_info": {
-                "group_info": {"group_id": "mbs-conversation-999"},
-                "user_info": {"user_id": "mbs-conversation-999"},
-            },
-            "message_segment": {"type": "text", "data": "MaiBot 已收到，当前进度正常。"},
+        "message_info": {
+            "message_id": "reply-1",
+            "group_info": {"group_id": "mbs-conversation-999"},
+            "user_info": {"user_id": "mbs-conversation-999"},
         },
+        "message_segment": {"type": "text", "data": "MaiBot 已收到，当前进度正常。"},
     }
 
     module._handle_maibot_reply(
@@ -420,3 +434,184 @@ def test_disabling_maibot_binding_stops_its_connection(maibot_fixture, monkeypat
         toggle_binding(db, binding)
 
     assert stopped == [(identity["tenant_id"], identity["binding_id"])]
+
+
+@pytest.mark.parametrize("registered_account", ["account-real", ""])
+def test_maim_private_message_uses_trusted_conversation_and_channel_account(maibot_fixture, monkeypatch, registered_account):
+    factory, identity = maibot_fixture
+    module = load_directory_plugin("maibot_adapter", force=True).instance._module
+    captured = {}
+
+    class Registry:
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return True
+
+    monkeypatch.setattr(module, "maibot_client_registry", Registry())
+    request = _request(identity)
+    request = replace(request, config={**request.config, "protocol": "maim"}, context=replace(request.context, chat_type="direct"))
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        db.get(Conversation, identity["conversation_id"]).chat_type = "direct"
+        db.get(Channel, identity["channel_id"]).runtime_info_json = json.dumps(
+            {"account_connection": {"account_id": registered_account}}
+        )
+        db.commit()
+        assert module.execute_message_action(db, request).ok
+    message = captured["api_message"]
+    assert message["message_info"]["group_info"] is None
+    assert message["message_info"]["user_info"]["user_id"] == f"mbs-conversation-{identity['conversation_id']}"
+    assert message["account_id"] == (registered_account or f"mbs-channel-{identity['channel_id']}")
+    assert "tenant-maibot-key" not in repr(captured["config"])
+    assert "tenant-maibot-key" not in repr(module._load_config(request.config))
+
+
+@pytest.mark.parametrize("protocol", ["maim", "legacy_api"])
+def test_reply_deduplicates_by_message_id_even_when_body_changes(maibot_fixture, monkeypatch, protocol):
+    from app.services.plugin_runtime.maibot_client import MaiBotConnectionKey
+
+    factory, identity = maibot_fixture
+    module = load_directory_plugin("maibot_adapter", force=True).instance._module
+    monkeypatch.setattr(module, "TenantSessionLocal", factory)
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        binding = db.get(BotPlugin, identity["binding_id"])
+        binding.config_json = json.dumps({**json.loads(binding.config_json), "protocol": protocol})
+        db.commit()
+    for text in ("第一条回复", "同一个编号的重复回复"):
+        package = {
+            "message_info": {"message_id": "stable-reply-id"},
+            "message_segment": {"type": "seglist", "data": [{"type": "text", "data": text}]},
+        }
+        if protocol == "legacy_api":
+            package = {"type": "sys_std", "msg_id": "stable-reply-id", "payload": package}
+        module._handle_maibot_reply(MaiBotConnectionKey(identity["tenant_id"], identity["binding_id"]), identity["conversation_id"], package)
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        jobs = db.scalars(select(TaskJob)).all()
+        assert len(jobs) == 1
+        assert parse_job_payload(jobs[0])["payload"]["content"] == "第一条回复"
+
+
+@pytest.mark.parametrize("disabled", ["binding", "bot", "channel", "output", "group_reply", "group_scope", "private_reply", "other_tenant"])
+def test_late_reply_rechecks_current_permissions(maibot_fixture, monkeypatch, disabled):
+    from app.services.plugin_runtime.maibot_client import MaiBotConnectionKey
+
+    factory, identity = maibot_fixture
+    module = load_directory_plugin("maibot_adapter", force=True).instance._module
+    monkeypatch.setattr(module, "TenantSessionLocal", factory)
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        binding = db.get(BotPlugin, identity["binding_id"])
+        config = json.loads(binding.config_json)
+        if disabled == "binding":
+            binding.status = "disabled"
+        elif disabled == "bot":
+            db.get(Bot, identity["bot_id"]).is_enabled = False
+        elif disabled == "channel":
+            db.get(Channel, identity["channel_id"]).is_enabled = False
+        elif disabled == "output":
+            config["enable_reply_output"] = False
+        elif disabled == "group_reply":
+            config["reply_group_messages"] = False
+        elif disabled == "private_reply":
+            db.get(Conversation, identity["conversation_id"]).chat_type = "direct"
+            config["reply_private_messages"] = False
+        elif disabled == "group_scope":
+            room = Chatroom(tenant_id=identity["tenant_id"], channel_id=identity["channel_id"], bot_id=identity["bot_id"], external_id="maibot-group-real", name="群")
+            db.add(room)
+            db.flush()
+            db.add(GroupPluginScope(tenant_id=identity["tenant_id"], channel_id=identity["channel_id"], chatroom_id=room.id, bot_plugin_id=binding.id, enabled=False))
+        binding.config_json = json.dumps(config)
+        db.commit()
+    tenant_id = identity["tenant_id"] + 1 if disabled == "other_tenant" else identity["tenant_id"]
+    module._handle_maibot_reply(
+        MaiBotConnectionKey(tenant_id, identity["binding_id"]), identity["conversation_id"],
+        {"message_info": {"message_id": "late"}, "message_segment": {"type": "text", "data": "不能发出"}},
+    )
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        assert db.scalar(select(TaskJob.id)) is None
+
+
+def test_invalid_protocol_does_not_create_connection(maibot_fixture, monkeypatch):
+    factory, identity = maibot_fixture
+    module = load_directory_plugin("maibot_adapter", force=True).instance._module
+    request = _request(identity)
+    request = replace(request, config={**request.config, "protocol": "guess"})
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        result = module.execute_message_action(db, request)
+    assert result.output["provider_status"] == "invalid_protocol"
+
+
+@pytest.mark.parametrize("protocol", ["maim", "legacy_api"])
+@pytest.mark.parametrize("chat_type", ["group", "direct"])
+def test_real_message_roundtrip_through_local_websocket_and_outbound_queue(maibot_fixture, monkeypatch, protocol, chat_type):
+    """真实插件、独立连接线程、回环服务及 SQLite 出站任务的完整闭环。"""
+    from websockets.asyncio.server import serve
+    from app.services.plugin_runtime.maibot_client import MaiBotClientRegistry
+
+    factory, identity = maibot_fixture
+    module = load_directory_plugin("maibot_adapter", force=True).instance._module
+    registry = MaiBotClientRegistry()
+    monkeypatch.setattr(module, "TenantSessionLocal", factory)
+    monkeypatch.setattr(module, "maibot_client_registry", registry)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        completed = asyncio.Event()
+        handled = []
+        original_handler = module._handle_maibot_reply
+
+        def handler(*args):
+            original_handler(*args)
+            handled.append(args)
+            if len(handled) == 2:
+                loop.call_soon_threadsafe(completed.set)
+
+        monkeypatch.setattr(module, "_handle_maibot_reply", handler)
+
+        async def server(ws):
+            packet = json.loads(await ws.recv())
+            incoming = packet["payload"] if protocol == "legacy_api" else packet
+            info = incoming["message_info"]
+            sender = info["sender_info"] if protocol == "legacy_api" else info
+            group = sender["group_info"]
+            target = {"group_info": group, "user_info": sender["user_info"] if chat_type == "direct" else None}
+            response_info = {
+                "platform": "multi-bot-saas", "message_id": "real-roundtrip",
+                "group_info": group,
+                "user_info": {"platform": "multi-bot-saas", "user_id": "robot", "user_nickname": "麦麦"},
+                "receiver_info": target,
+            }
+            if protocol == "legacy_api" and chat_type == "direct":
+                response_info["user_info"] = target["user_info"]
+            for text in ("麦麦收到了", "重复的同编号回复"):
+                response = {"message_info": response_info, "message_segment": {"type": "seglist", "data": [{"type": "text", "data": text}]}}
+                if protocol == "legacy_api":
+                    response = {"type": "sys_std", "msg_id": "real-roundtrip", "payload": response}
+                await ws.send(json.dumps(response))
+            await ws.wait_closed()
+
+        async with serve(server, "127.0.0.1", 0) as service:
+            port = service.sockets[0].getsockname()[1]
+            request = _request(identity)
+            config = {**request.config, "protocol": protocol, "api_server_ws_url": f"ws://127.0.0.1:{port}/maim/test/ws"}
+            request = replace(request, config=config, context=replace(request.context, chat_type=chat_type))
+            with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+                conversation = db.get(Conversation, identity["conversation_id"])
+                conversation.chat_type = chat_type
+                binding = db.get(BotPlugin, identity["binding_id"])
+                binding.config_json = json.dumps({key: value for key, value in config.items() if key != "api_key"})
+                db.commit()
+            try:
+                with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+                    assert module.execute_message_action(db, request).ok
+                await asyncio.wait_for(completed.wait(), timeout=10)
+            finally:
+                await asyncio.to_thread(registry.stop_all)
+        with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+            jobs = db.scalars(select(TaskJob)).all()
+            assert len(jobs) == 1
+            payload = parse_job_payload(jobs[0])
+            assert payload["channel_id"] == identity["channel_id"]
+            assert payload["payload"]["external_id"] == "maibot-group-real"
+            assert payload["payload"]["chat_type"] == chat_type
+            assert payload["payload"]["content"] == "麦麦收到了"
+
+    asyncio.run(run())

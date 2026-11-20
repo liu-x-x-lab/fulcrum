@@ -26,6 +26,7 @@ OUTBOUND_DISPATCH_JOB = "outbound_dispatch"
 WORKWECHAT_CLOUD_OUTBOUND_JOB = "workwechat_cloud_outbound"
 WORKWECHAT_CLOUD_CONTROL_JOB = "workwechat_cloud_control"
 INBOUND_MEDIA_FETCH_JOB = "inbound_media_fetch"
+MAIBOT_MEDIA_FORWARD_JOB = "maibot_media_forward"
 OPEN_WEBHOOK_DELIVERY_JOB = "open_webhook_delivery"
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
 JOB_PAYLOAD_INLINE_LIMIT = 60000
@@ -202,8 +203,20 @@ def parse_job_payload(job: TaskJob) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     if isinstance(parsed, dict) and parsed.get("__storage__") == "file":
-        return _load_external_job_payload(parsed)
+        payload = _load_external_job_payload(parsed)
+        fields = parsed.get("internal_fields")
+        return {**payload, **fields} if payload and isinstance(fields, dict) else payload
     return parsed if isinstance(parsed, dict) else {}
+
+
+def add_internal_job_fields(job: TaskJob, fields: dict[str, Any]) -> None:
+    """Attach server-generated fields without reading or copying a large media payload."""
+    stored = json.loads(job.payload_json or "{}")
+    if stored.get("__storage__") == "file":
+        stored["internal_fields"] = {**(stored.get("internal_fields") or {}), **fields}
+    else:
+        stored.update(fields)
+    job.payload_json = json.dumps(stored, ensure_ascii=False)
 
 
 def _serialize_job_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:

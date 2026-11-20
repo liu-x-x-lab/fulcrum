@@ -192,9 +192,7 @@ def bind_plugin(
         existing.runtime_status = compute_binding_runtime(existing)
         db.commit()
         db.refresh(existing)
-        # 保存配置可能更换 WebSocket 地址、密钥或连接参数。旧连接必须立即停止，
-        # 下一条消息会按刚提交的配置建立新连接，不做双连接兼容或隐式降级。
-        _stop_binding_connection_if_needed(existing)
+        _refresh_binding_connection(db, existing)
         return existing
 
     binding = BotPlugin(
@@ -216,7 +214,7 @@ def bind_plugin(
     )
     db.commit()
     db.refresh(binding)
-    _stop_binding_connection_if_needed(binding)
+    _refresh_binding_connection(db, binding)
     return binding
 
 
@@ -238,6 +236,10 @@ def unbind_plugin(db: Session, binding: BotPlugin) -> None:
         db.delete(scope)
     # 定时动作和已排队的插件出站都要取消，重新绑定不能复活旧任务。
     plugin_code = str(binding.plugin.code or "") if binding.plugin else ""
+    if plugin_code == "maibot_adapter":
+        from app.services.maibot_config import invalidate_binding_replies
+
+        invalidate_binding_replies(binding)
     for job in db.scalars(select(TaskJob).where(
         TaskJob.status == "pending",
         TaskJob.related_id == binding.id,
@@ -263,11 +265,27 @@ def unbind_plugin(db: Session, binding: BotPlugin) -> None:
 
 def toggle_binding(db: Session, binding: BotPlugin) -> BotPlugin:
     binding.status = "disabled" if binding.status == "enabled" else "enabled"
+    if binding.status == "disabled" and binding.plugin and binding.plugin.code == "maibot_adapter":
+        from app.services.maibot_config import invalidate_binding_replies
+
+        invalidate_binding_replies(binding)
     binding.runtime_status = compute_binding_runtime(binding)
     db.commit()
     db.refresh(binding)
-    _stop_binding_connection_if_needed(binding)
+    _refresh_binding_connection(db, binding)
     return binding
+
+
+def _refresh_binding_connection(db: Session, binding: BotPlugin) -> None:
+    if binding.plugin is None or binding.plugin.code != "maibot_adapter":
+        return
+    _stop_binding_connection_if_needed(binding)
+    if binding.status == "enabled":
+        from app.services.maibot_lifecycle import start_maibot_binding
+        from app.services.plugin_governance import blocked_plugin_codes
+
+        if "maibot_adapter" not in blocked_plugin_codes(db, binding.tenant_id):
+            start_maibot_binding(binding)
 
 
 def _stop_binding_connection_if_needed(binding: BotPlugin) -> None:
@@ -300,7 +318,7 @@ def update_binding_config(
     )
     db.commit()
     db.refresh(binding)
-    _stop_binding_connection_if_needed(binding)
+    _refresh_binding_connection(db, binding)
     return binding
 
 

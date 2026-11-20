@@ -203,6 +203,9 @@ class WechatIpadAdapter(BaseChannelAdapter):
             )
         )
         raw_content = self._extract_text_content(envelope)
+        from app.services.maibot_wechat import source_mentions
+
+        mentions = source_mentions(self._clean_string(self._pick_value(envelope, "MsgSource", "MessageSource", "msg_source")))
         quote_payload = self._parse_quote_payload(raw_content)
         if quote_payload:
             message_type = "text"
@@ -281,6 +284,8 @@ class WechatIpadAdapter(BaseChannelAdapter):
                 "direction": direction,
                 "timestamp": timestamp,
                 "quote_payload": quote_payload,
+                "mention_user_list": mentions,
+                "mentioned_self": bool(self_wxid and self_wxid in mentions),
                 "raw_content": raw_content,
                 "mod_contacts_chatroom_ids": self.parse_mod_contacts_msg(payload),
                 "image_info": image_info,

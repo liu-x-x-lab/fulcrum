@@ -10,7 +10,7 @@ from app.core.tenant_db import tenant_session
 from app.models.entities import BotPlugin, Channel, Conversation, GroupPluginScope
 from app.models.saas import ProviderNode, ProviderNodeAccount
 from app.services.outbound_batch import enqueue_outbound_job
-from app.services.task_queue import WORKWECHAT_CLOUD_CONTROL_JOB, enqueue_job
+from app.services.task_queue import WORKWECHAT_CLOUD_CONTROL_JOB, enqueue_job, parse_job_payload
 from app.services.wechat_webridge.service import claim_commands, enqueue_command
 from app.services.workwechat_cloud_poll import claim_cloud_jobs, claim_provider_node_jobs
 from test_group_gate_webridge import ROOM, env  # noqa: F401
@@ -103,3 +103,31 @@ def test_claim_does_not_send_plugin_message_to_mismatched_conversation(claim_con
     db.commit()
     assert claim() == []
     assert job.status == "cancelled"
+
+
+@pytest.mark.parametrize("change", ["unchanged", "transfer", "revision", "disabled", "reply_off"])
+def test_maibot_claim_rechecks_connection_ownership_and_revision(claim_context, change):
+    db, channel, conversation, ids, claim = claim_context
+    binding = db.get(BotPlugin, ids["binding"])
+    binding.plugin.code = "maibot_adapter"
+    spec = {"id": "daily", "enabled": True, "enable_reply_output": True, "revision": "daily-v1",
+            "scope": {"mode": "selected", "targets": [{"channel_id": channel.id, "chat_type": "group", "external_id": ROOM}]}}
+    original = json.dumps({"connections": [spec]})
+    binding.config_json = original
+    db.commit()
+    job = _enqueue(db, channel, conversation, ids, plugin_code="maibot_adapter")
+    payload = {**parse_job_payload(job), "maibot_binding_id": binding.id, "maibot_connection_id": "daily", "maibot_connection_revision": "daily-v1"}
+    job.payload_json = json.dumps(payload)
+    if change == "transfer": spec["id"] = "hobby"
+    elif change == "revision": spec["revision"] = "daily-v2"
+    elif change == "disabled": spec["enabled"] = False
+    elif change == "reply_off": spec["enable_reply_output"] = False
+    binding.config_json = json.dumps({"connections": [spec]})
+    db.commit()
+    if change == "unchanged":
+        assert len(claim()) == 1 and job.status == "running"
+    else:
+        assert claim() == [] and job.status == "cancelled"
+        binding.config_json = original
+        db.commit()
+        assert claim() == []

@@ -1,0 +1,58 @@
+<div class="maibot-manager" data-maibot-manager data-binding-id="{{ item.id }}" data-endpoint="/plugins/{{ item.id }}/maibot" data-can-edit="{{ 'true' if current_user.role in ['tenant_admin', 'operator'] else 'false' }}">
+  <div class="mb-heading"><div><h3>MaiBot 连接</h3><p class="muted-text">每条连接独立配置，聊天只交给选中的 MaiBot。</p></div><button class="btn btn-secondary" type="button" data-mb-add data-mb-write>＋ 添加连接</button></div>
+  <p class="muted-text" data-mb-binding-warning hidden>此机器人尚未启用插件绑定。配置可以保存，启用上方插件开关后才会收发消息。</p>
+  <div class="mb-connections" data-mb-connections aria-label="选择 MaiBot 连接"></div>
+  <p class="muted-text" data-mb-empty hidden>还没有 MaiBot 连接，点击「添加连接」开始配置。</p>
+  <div data-mb-editor hidden>
+    <div class="mb-heading"><h4 data-mb-title></h4><label class="mb-inline-check"><input type="checkbox" data-mb-enabled data-mb-write>启用此连接</label></div>
+    <div class="mb-diagnostics">
+      <div class="mb-heading"><h4>最近收发</h4><span class="muted-text" data-mb-connection-detail></span></div>
+      <dl>
+        <div><dt>转给 MaiBot</dt><dd data-mb-stage="forward"></dd></div>
+        <div><dt>MaiBot 回复</dt><dd data-mb-stage="reply"></dd></div>
+        <div><dt>渠道发送</dt><dd data-mb-stage="delivery"></dd></div>
+      </dl>
+    </div>
+    <div class="mb-fields">
+      <label class="gf-field">连接名称<input type="text" maxlength="40" data-mb-name data-mb-write autocomplete="off" placeholder="例如：日常麦麦"></label>
+      <label class="gf-field">连接令牌<input type="password" data-mb-token data-mb-write autocomplete="new-password" placeholder="输入连接令牌（如有）"><small data-mb-token-status>令牌加密保存，不会回显。</small></label>
+      <label class="gf-field mb-full">MaiBot 连接地址<input type="text" data-mb-address data-mb-write maxlength="2000" spellcheck="false" placeholder="ws://主机:端口/完整连接路径"><small>填写完整的 WebSocket 地址；连接令牌填写到上方独立栏位。</small></label>
+    </div>
+    <div class="mb-scope-heading"><h4>交给它处理的聊天</h4><span class="muted-text" data-mb-count aria-live="polite"></span></div>
+    <div class="mb-legacy" data-mb-legacy hidden><p>默认连接正在沿用旧配置的全部聊天范围（仍受原采集开关和群权限限制）。<span data-mb-exclusions></span></p><button class="btn btn-secondary" type="button" data-mb-selected-only data-mb-write>改为只处理勾选的聊天</button></div>
+    <div class="mb-chat-picker" data-mb-picker>
+      <div class="mb-picker-triggers">
+        <button class="mb-picker-trigger" type="button" data-mb-type="group" aria-haspopup="dialog" aria-expanded="false" aria-controls="maibot-chats-{{ item.id }}" disabled><span>选择群聊<small data-mb-picker-count="group">尚未选择</small></span><span class="ui-select-caret" aria-hidden="true"></span></button>
+        <button class="mb-picker-trigger" type="button" data-mb-type="direct" aria-haspopup="dialog" aria-expanded="false" aria-controls="maibot-chats-{{ item.id }}" disabled><span>选择私聊<small data-mb-picker-count="direct">尚未选择</small></span><span class="ui-select-caret" aria-hidden="true"></span></button>
+      </div>
+      <div class="mb-chat-panel" id="maibot-chats-{{ item.id }}" data-mb-picker-panel role="dialog" aria-label="选择群聊" popover="manual" hidden>
+        <div class="mb-picker-heading"><strong data-mb-picker-title>选择群聊</strong><span class="muted-text" data-mb-result-count aria-live="polite"></span><button class="btn btn-ghost" type="button" data-mb-picker-close>完成选择</button></div>
+        <div class="mb-search">
+          <label class="gf-field"><span data-mb-search-label>搜索群名称、备注或 ID</span><input type="search" data-mb-search autocomplete="off" placeholder="输入名称即可查找"></label>
+          <label class="gf-field">接入账号<select data-mb-account aria-label="筛选接入账号"><option value="">全部接入账号</option></select></label>
+        </div>
+        <div class="mb-target-list" data-mb-targets role="group" aria-label="可选择的群聊"></div>
+        <div class="mb-pager"><button class="btn btn-ghost" type="button" data-mb-prev disabled>上一页</button><span class="muted-text" data-mb-page></span><button class="btn btn-ghost" type="button" data-mb-next disabled>下一页</button></div>
+      </div>
+    </div>
+    <div class="mb-selection" data-mb-selection aria-label="已选聊天"></div>
+    <p class="muted-text">列表读取本地已同步的群聊、好友和私聊记录。找不到时，可先到<a href="/chatrooms">群聊</a>或<a href="/contacts">好友</a>列表同步；选择聊天不会发送消息。</p>
+    <details class="mb-advanced disclosure"><summary>更多设置（通常无需修改）</summary><div class="mb-fields">
+      <label class="gf-field">对话方式<select data-mb-mode data-mb-write><option value="chat">接收消息并允许回复</option><option value="collect">只收集消息，不回复</option></select></label>
+      <label class="gf-field">连接协议<select data-mb-protocol data-mb-write><option value="maim">新版 MaiBot（MaiM）</option><option value="legacy_api">旧版 API（兼容）</option></select></label>
+      <label class="mb-inline-check mb-full"><input type="checkbox" data-mb-mention data-mb-write>群聊只转发 @ 机器人的消息</label>
+      <label class="mb-inline-check mb-full"><input type="checkbox" data-mb-clear-token data-mb-write>清除这条连接已保存的令牌</label>
+      <details class="mb-full disclosure"><summary>群聊与私聊的单独开关</summary><div class="mb-fields">
+        <label class="mb-inline-check"><input type="checkbox" data-mb-flag="collect_group_messages" data-mb-write>接收群聊消息</label>
+        <label class="mb-inline-check"><input type="checkbox" data-mb-flag="collect_private_messages" data-mb-write>接收私聊消息</label>
+        <label class="mb-inline-check"><input type="checkbox" data-mb-flag="reply_group_messages" data-mb-write>允许群聊回复</label>
+        <label class="mb-inline-check"><input type="checkbox" data-mb-flag="reply_private_messages" data-mb-write>允许私聊回复</label>
+      </div></details>
+      <p class="muted-text mb-full">超时、心跳、断线重连和队列沿用推荐值或旧配置。原来的分类开关保留，可在上方单独调整。</p>
+    </div></details>
+    <div class="mb-actions"><button class="btn" type="button" data-mb-save data-mb-write>保存并应用</button><button class="btn btn-secondary" type="button" data-mb-test data-mb-write>测试连接</button><button class="btn btn-secondary" type="button" data-mb-restart data-mb-write>重连当前连接</button><button class="btn btn-danger" type="button" data-mb-delete data-mb-write>删除连接</button></div>
+  </div>
+  <div class="mb-actions" data-mb-empty-actions hidden><button class="btn" type="button" data-mb-save data-mb-write>保存空连接列表</button></div>
+  <div class="mb-feedback-row"><p data-mb-feedback role="status">正在载入连接配置…</p><button class="btn btn-ghost" type="button" data-mb-refresh>重新载入</button></div>
+  <noscript><p>请启用 JavaScript 后管理 MaiBot 连接。</p></noscript>
+</div>
