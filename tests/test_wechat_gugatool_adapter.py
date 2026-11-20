@@ -25,6 +25,16 @@ def _conversation(external_id: str = "wxid_peer") -> Conversation:
     return Conversation(bot_id=1, channel_id=1, external_id=external_id, chat_type="direct")
 
 
+def test_link_caption_survives_plugin_field_mapping(monkeypatch):
+    adapter = WechatGugatoolAdapter()
+    monkeypatch.setattr(adapter, "_queued_result", lambda *args: args[-1])
+    for field in ("desc", "link_description"):
+        params = adapter._send_link(_channel(), _conversation(), {
+            "url": "https://example.org/work", "content": "author", field: "caption",
+        }, "peer")
+        assert params["description"] == "caption"
+
+
 def test_group_message_uses_room_as_conversation_and_member_as_sender() -> None:
     """群消息的 fromUser 是群 id，真正发送者是 realChatUser。"""
 

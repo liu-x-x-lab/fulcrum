@@ -404,7 +404,8 @@ class WechatGugatoolAdapter(BaseChannelAdapter):
         params: dict[str, Any] = {
             "to_wxid": to_wxid,
             "title": str(payload.get("title") or payload.get("content") or url).strip(),
-            "description": str(payload.get("description") or payload.get("content") or "").strip(),
+            "description": str(payload.get("description") or payload.get("desc")
+                               or payload.get("link_description") or payload.get("content") or "").strip(),
             "url": url,
         }
         thumb_url = str(payload.get("thumb_url") or payload.get("image_url") or "").strip()

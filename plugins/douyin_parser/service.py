@@ -378,7 +378,7 @@ def _video_replies(client: PluginHttpClient, media: dict[str, Any], mode: str, t
             return [video_reply(video_base64=_b64(video), cover_base64=_b64(cover), play_length=round(duration))]
     return [
         link_reply(
-            url=url,
+            url=media.get("page_url") or url,
             title=author or "抖音作品",
             description=title,
             thumb_url=cover_url if cover_url.startswith("http") else "",

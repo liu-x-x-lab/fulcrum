@@ -237,6 +237,17 @@ def test_file_mode_sends_remote_file_without_downloading() -> None:
     assert not client.calls
 
 
+def test_work_page_is_used_only_for_cards():
+    media = parse.parse_aweme(VIDEO_AWEME)
+    media["duration_seconds"] = None
+    client = _media_client()
+    card, = service.build_replies(client, media, download_mode="card", timeout_seconds=10)
+    file, = service.build_replies(client, media, download_mode="file", timeout_seconds=10)
+    assert card["url"] == f"https://www.douyin.com/video/{VIDEO_AWEME['aweme_id']}"
+    assert file["file_url"] == media["url"] != card["url"]
+    assert not client.calls
+
+
 @pytest.mark.parametrize(("channel", "duration_ms", "mode", "kind"), [
     ("wechat_webridge", 5000, "card", "video"),
     ("wechat_webridge", 600000, "card", "video"),

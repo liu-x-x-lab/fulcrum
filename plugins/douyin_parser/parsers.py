@@ -255,6 +255,9 @@ def parse_aweme(aweme: dict[str, Any], *, fallback_duration: float | None = None
     uri = str(play_addr.get("uri") or "") if isinstance(play_addr, dict) else ""
     if uri:
         video["url"] = _AWEME_PLAY_URL.format(uri=uri)
+    work_id = str(aweme.get("aweme_id") or "")
+    if re.fullmatch(r"[0-9]{1,20}", work_id):
+        video["page_url"] = f"https://www.douyin.com/video/{work_id}"
     return video
 
 
