@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.core.settings import settings
 from app.core.time import ensure_shanghai_datetime, now_shanghai
 from app.models.entities import Channel, MomentsMedia, MomentsPost, TaskJob
+from app.services import media_storage
 from app.services.wechat_webridge import moments, service
 
 COMMAND = "moments_media_download"
@@ -152,5 +153,6 @@ def accepts_upload(row: MomentsMedia | None, token: str, channel_id: int) -> boo
 def finish_upload(row: MomentsMedia, path: Path, size: int, mime_type: str) -> None:
     """文件已完整写盘:记录位置并让令牌作废(重复上传、别人拿到地址都没用)。"""
 
+    media_storage.adopt(path, tenant_id=row.tenant_id, boundary=storage_dir(row.channel_id))
     row.status, row.storage_path, row.file_size, row.mime_type = "downloaded", str(path), int(size), mime_type
     row.last_error, row.token_hash = None, None

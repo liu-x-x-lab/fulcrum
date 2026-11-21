@@ -2,7 +2,7 @@
 code = "group_auto_invite"
 display_name = "自动拉群"
 plugin_type = "command"
-version = "2.0.0"
+version = "2.0.1"
 author = "abot"
 description = "通过关键词邀请私聊用户加入当前机器人管理的群聊"
 default_enabled = false

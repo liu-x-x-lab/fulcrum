@@ -17,6 +17,7 @@ from app.services.wechat_ipad.action_results import (
 from app.services.wechat_ipad.client import WechatIpadApiClient
 from app.services.wechat_ipad.common import _parse_json, _resolve_wxid, _utcnow_iso
 from app.services.wechat_ipad.contract import IPAD_874_CONTRACT
+from app.services.wechat_ipad.operations.invitations import send_invitation
 from app.services.wechat_ipad.runtime import _persist_runtime
 from app.services.wechat_ipad.transport import _safe_call
 
@@ -35,6 +36,19 @@ def run_wechat_ipad_action(
     wxid = _resolve_wxid(channel, runtime_info, adapter_config)
     payload = params or {}
     action_key = str(action or "").strip().lower()
+
+    if action_key == "invite_chatroom_member":
+        members = payload.get("to_wxids") or payload.get("wxids") or []
+        # 手动输入允许显式逗号名单，插件的结构化列表则逐项核验，不在内部二次展开。
+        if isinstance(members, str):
+            members = [m.strip() for m in members.split(",")]
+        invite = send_invitation(api_client, channel, wxid, str(payload.get("chatroom_id") or ""), members)
+        summary = "邀请已发送，等待成员确认" if invite["ok"] else invite["error_message"]
+        return _persist_runtime(db, channel, summary=summary, error=invite.get("error_code"), extra={
+            "last_action_name": action_key, "last_action_at": _utcnow_iso(), "last_action_ok": invite["ok"],
+            "last_action_params": {"chatroom_id": payload.get("chatroom_id")}, "last_action_response": invite,
+            "last_action_summary": summary, "last_action_result_preview": {"status": invite["status"]},
+        })
 
     action_specs: dict[str, dict[str, Any]] = {
         "get_contact_list": {
@@ -87,39 +101,6 @@ def run_wechat_ipad_action(
             },
             "stage": "chatroom_qrcode",
             "endpoint": IPAD_874_CONTRACT.endpoints.group_get_qrcode,
-            "requires_wxid": True,
-        },
-        "get_chatroom_announce": {
-            "func": api_client.get_chatroom_announce,
-            "kwargs": {
-                "wxid": wxid,
-                "chatroom_id": str(payload.get("chatroom_id") or ""),
-            },
-            "stage": "chatroom_announce",
-            "endpoint": IPAD_874_CONTRACT.endpoints.group_get_info_detail,
-            "requires_wxid": True,
-        },
-        "invite_chatroom_member": {
-            "func": api_client.invite_chatroom_member,
-            "kwargs": {
-                "wxid": wxid,
-                "chatroom_id": str(payload.get("chatroom_id") or ""),
-                "to_wxids": payload.get("to_wxids") or payload.get("wxids") or [],
-            },
-            "stage": "chatroom_invite",
-            "endpoint": IPAD_874_CONTRACT.endpoints.group_invite_member,
-            "requires_wxid": True,
-        },
-        "accept_friend": {
-            "func": api_client.accept_friend,
-            "kwargs": {
-                "wxid": wxid,
-                "scene": int(payload.get("scene") or 0),
-                "v1": str(payload.get("v1") or ""),
-                "v2": str(payload.get("v2") or ""),
-            },
-            "stage": "accept_friend",
-            "endpoint": IPAD_874_CONTRACT.endpoints.friend_pass_verify,
             "requires_wxid": True,
         },
         "download_image": {

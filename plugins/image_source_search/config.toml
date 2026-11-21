@@ -1,0 +1,50 @@
+[plugin]
+code = "image_source_search"
+display_name = "牛牛找鸡"
+plugin_type = "command"
+version = "1.0.0"
+author = "Fulcrum"
+description = "引用图片或发送图片链接，查找匹配网页、发帖账号和动画出处。仅在发出指令时向搜索服务提交图片。"
+default_enabled = false
+
+[capability]
+channel_types = ["wechat_ipad", "wechat_webridge", "wechat_gugatool", "telegram", "simulator"]
+chat_types = ["direct", "group"]
+message_types = ["text", "quote"]
+priority = 85
+consume_policy = "stop"
+timeout_ms = 45000
+
+[matcher]
+commands = ["牛牛找鸡", "找鸡"]
+keywords = []
+require_mention = false
+
+[runtime]
+vision_api_key = ""
+anime_enabled = true
+
+[secrets]
+fields = ["vision_api_key"]
+
+[[config.fields]]
+key = "vision_api_key"
+label = "Google Cloud Vision API 密钥"
+kind = "secret"
+group = "搜索服务"
+hint = "搜索真人 Cos 和插画的匹配网页。请启用 Cloud Vision API，并在 Google Cloud 设置配额。"
+
+[[config.fields]]
+key = "anime_enabled"
+label = "用 trace.moe 补查动画截图"
+kind = "bool"
+default = true
+group = "搜索服务"
+hint = "没有匹配网页时，将图片提交给 trace.moe。"
+
+[[config.fields]]
+key = "commands"
+label = "触发命令"
+kind = "tags"
+default = ["牛牛找鸡", "找鸡"]
+group = "触发方式"

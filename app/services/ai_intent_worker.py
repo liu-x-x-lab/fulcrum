@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import threading
 import time
+from dataclasses import replace
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -21,8 +23,10 @@ from app.core.db import SessionLocal, TenantSessionLocal
 from app.core.logging import get_logger
 from app.core.tenant_context import tenant_scope
 from app.core.tenant_db import platform_session, tenant_session
-from app.models.entities import Channel, TaskJob
-from app.services import ai_chat, ai_dispatch, ai_memory
+from app.models.entities import Channel, Conversation, Message, TaskJob
+from app.core.time import now_shanghai, ensure_shanghai_datetime
+from app.services import ai_chat, ai_dispatch, ai_memory, ai_vision, ai_drawing_jobs
+from app.services.message_media import REQUEST_TIMEOUT_SECONDS
 from app.services.task_queue import (
     AI_INTENT_JOB,
     claim_next_job,
@@ -88,25 +92,51 @@ def _execute_intent(job_id: int) -> None:
     # 阶段一：短会话，只读取并固化需要的数据。
     with tenant_session(TenantSessionLocal) as db:
         job = db.get(TaskJob, job_id)
-        if job is None:
+        if job is None or job.status in {"completed", "failed", "cancelled"}:
             return
         payload = parse_job_payload(job)
+        waiting = json.loads(job.result_json or "{}")
         try:
-            prepared = ai_dispatch.prepare_intent(db, payload)
+            drawing = ai_drawing_jobs.prepare(db, payload, allow_media_request=not waiting.get("media_wait_started"))
+            prepared = None if drawing else ai_dispatch.prepare_intent(db, payload, allow_media_request=not waiting.get("media_wait_started"))
         except Exception as exc:
             fail_job(db, job, error_message=str(exc))
             logger.exception("ai intent prepare failed", extra={"job_id": job_id})
             return
-        if prepared is None:
+        if prepared is None and drawing is None:
             complete_job(db, job, result={"skipped": True})
             return
-        config, text, catalog, chat = prepared
+        chat = None
+        if prepared:
+            config, text, catalog, chat = prepared
+        media = drawing.media if drawing else (chat.media if chat else None)
+        if media is not None and media.state == "loading":
+            started = ensure_shanghai_datetime(datetime.fromisoformat(waiting["media_wait_started"])) if waiting.get("media_wait_started") else now_shanghai()
+            if now_shanghai() - started < timedelta(seconds=REQUEST_TIMEOUT_SECONDS):
+                # 复用同一任务等待媒体：不睡眠、不持有数据库、不调用模型，也不重复下载。
+                job.status = "pending"
+                job.available_at = now_shanghai() + timedelta(seconds=3)
+                job.locked_at = None
+                job.result_json = json.dumps({"media_wait_started": started.isoformat()})
+                db.commit()
+                return
+            media = replace(media, state="error", error="获取媒体超时，请确认手机在线或重新发送后引用")
+            if drawing:
+                drawing = replace(drawing, media=media)
+            else:
+                chat = replace(chat, media=media)
+        db.commit()
+
+    if drawing is not None:
+        ai_drawing_jobs.execute(job_id, payload, drawing, session_factory=TenantSessionLocal)
+        return
 
     # 阶段二：不持有任何数据库会话，慢的模型调用只占用线程。
     # 有可调度功能先做意图路由；模型认为不是功能请求（或根本没有功能目录）时，
     # 若开了聊天兜底，就按人格直接聊天。路由出错、被拒绝等情况不聊天，避免误回。
     route_started = time.monotonic()
-    intent = ai_dispatch.analyze_intent(config, text, catalog) if catalog else ai_dispatch.AiIntent(status="no_match", reason="没有可调度功能")
+    visual = chat is not None and chat.media is not None
+    intent = ai_dispatch.analyze_intent(config, text, catalog) if catalog and not visual else ai_dispatch.AiIntent(status="no_match", reason="引用媒体提问" if visual else "没有可调度功能")
     route_seconds = time.monotonic() - route_started
     chat_reply = ""
     timing: dict[str, float] = {}
@@ -114,12 +144,18 @@ def _execute_intent(job_id: int) -> None:
         # 聊天前并行完成:按当前话题召回长期记忆,以及(问天气/价格这类实时问题时)直接预搜索。
         # 都带超时和断路保护,出问题时返回空,不影响聊天。
         started = time.monotonic()
-        chat, prefetched = ai_chat.prepare_context(chat)
+        if visual:
+            prefetched = None
+        else:
+            chat, prefetched = ai_chat.prepare_context(chat)
         timing["prepare"] = time.monotonic() - started
         try:
             started = time.monotonic()
             chat_reply = ai_chat.generate_reply(config, chat, prefetched)
             timing["reply"] = time.monotonic() - started
+        except ai_vision.VisionError as exc:
+            chat_reply = str(exc)
+            intent = ai_dispatch.AiIntent(status="error", reason=chat_reply[:200])
         except Exception as exc:
             logger.warning("ai chat reply failed", extra={"job_id": job_id})
             intent = ai_dispatch.AiIntent(status="error", reason=str(exc)[:200])
@@ -137,7 +173,7 @@ def _execute_intent(job_id: int) -> None:
         if job is None:
             return
         try:
-            result = _deliver(db, payload, intent, chat_reply)
+            result = _deliver(db, payload, intent, chat_reply, media_message_id=chat.media.message_id if visual else None)
             complete_job(db, job, result=result)
         except Exception as exc:
             db.rollback()
@@ -147,7 +183,7 @@ def _execute_intent(job_id: int) -> None:
 
     # 阶段四：回复已发出，再把这条发言异步写入长期记忆；记忆服务在后台抽取事实，失败不影响已完成的聊天。
     # 群里开了"记住所有聊天"时这句话由后台批量整理,不在这里重复写入。
-    if chat is not None and chat_reply and chat.memory_enabled and chat.bank_id and not chat.memory_all:
+    if chat is not None and chat.media is None and intent.status == "chatted" and chat_reply and chat.memory_enabled and chat.bank_id and not chat.memory_all:
         ai_memory.retain(
             chat.bank_id,
             label=chat.own_label,
@@ -191,7 +227,7 @@ def _execute_routed(db: Session, channel: Channel, payload: dict[str, Any], even
             message_id=payload.get('message_id'), trigger_source='ai_dispatch')
 
 
-def _deliver(db: Session, payload: dict[str, Any], intent: ai_dispatch.AiIntent, chat_reply: str = "") -> dict[str, Any]:
+def _deliver(db: Session, payload: dict[str, Any], intent: ai_dispatch.AiIntent, chat_reply: str = "", *, media_message_id: int | None = None) -> dict[str, Any]:
     """记录决策；识别出插件就直接执行，缺参数就追问，聊天则发送人格回复。"""
 
     from app.services.plugin_directory import send_ai_reply
@@ -203,6 +239,15 @@ def _deliver(db: Session, payload: dict[str, Any], intent: ai_dispatch.AiIntent,
     expired = expired_message_dispatch(event)
     if expired is not None:
         return expired
+    if media_message_id:
+        # 慢识别期间原媒体或提问可能被撤回；最终出站前再次核对，不恢复已经撤回的内容。
+        conversation = db.get(Conversation, payload.get("conversation_id"))
+        if channel is None or conversation is None or conversation.channel_id != channel.id or conversation.bot_id != channel.bot_id:
+            return {"status": "skipped", "reason": "media_scope_changed"}
+        for source_id in (payload.get("message_id"), media_message_id):
+            source = db.get(Message, source_id)
+            if source is None or source.conversation_id != conversation.id or source.status == "recalled" or source.external_status == "recalled":
+                return {"status": "skipped", "reason": "referenced_media_unavailable"}
     message = event.get("message") or {}
     conversation_id = payload.get("conversation_id")
     ai_dispatch.record_decision(
@@ -218,7 +263,7 @@ def _deliver(db: Session, payload: dict[str, Any], intent: ai_dispatch.AiIntent,
         return {"status": intent.status}
     if intent.status == "asked":
         send_ai_reply(db, channel, event, intent.question, conversation_id=conversation_id)
-    elif intent.status == "chatted" and chat_reply:
+    elif intent.status in {"chatted", "error"} and chat_reply:
         send_ai_reply(db, channel, event, chat_reply, conversation_id=conversation_id)
     elif intent.status == "routed" and intent.command_text:
         _execute_routed(db, channel, payload, event, intent.command_text)

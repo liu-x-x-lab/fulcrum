@@ -6,8 +6,8 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.services.crud import get_channel
+from app.services.account_dashboard import build_account_dashboard
 from app.services.wechat_webridge.dashboard import (
-    build_webridge_dashboard,
     build_webridge_device_panel,
     build_webridge_live_summary,
 )
@@ -43,7 +43,8 @@ async def wechat_webridge_dashboard_page(request: Request, channel_id: int, tab:
             "wechat_webridge_dashboard.html",
             page_title=f"微桥后台 · {channel.name}",
             channel=channel,
-            dashboard=build_webridge_dashboard(db, channel, tab=tab, keyword=keyword, page=page, conversation_id=conversation_id, sender=sender),
+            can_edit=True,
+            dashboard=build_account_dashboard(db, channel, tab=tab, keyword=keyword, page=page, conversation_id=conversation_id, sender=sender),
             device=build_webridge_device_panel(db, channel),
             live=build_webridge_live_summary(db, channel),
             notice=request.query_params.get("notice", ""),

@@ -114,6 +114,88 @@ https://fulcrum.example.com
 
 普通心跳、消息同步、联系人同步和群聊同步不会继续使用扫码登录代理。
 
+## Group directory
+
+Open **Account details > iPad dashboard** to search friends, groups, members
+and messages for one account. Both dashboards search stored friend records.
+iPad sync follows the provider's contact cursors and fetches profiles in batches.
+Missing profiles do not discard friend IDs or overwrite known names and avatars.
+Records are scoped to the tenant, channel and signed-in WeChat account. The
+database upgrade imports friends from previously saved iPad snapshots. Opening the dashboard
+or the cross-account **Friends** directory does not send messages. Operators can
+start a local direct conversation from either list; opening it again reuses the
+conversation. Read-only users can open existing history. Both entries preserve
+the source list filters and page when returning from the message center. Browsing
+does not contact the protocol service. Operators can explicitly sync contacts
+or groups; read-only users can browse. Group settings remain in **Group
+details**, and conversation history opens in the message center.
+
+**Sync groups** follows the signed-in account's contact pages to discover
+groups, including groups that have never sent a message to Fulcrum. Names are
+read in batches. Groups whose names are unavailable remain listed by ID.
+An incomplete directory read does not apply partial results. Absence from the
+directory does not mark a group as left or change its local settings.
+Use **Sync current group** in group management to refresh the member roster.
+
+Operators can edit or explicitly clear an iPad friend's remark in either
+directory. The submitted value is stored only after a successful write and a
+matching profile read for the same friend. An unconfirmed result is not retried;
+sync the friend directory before deciding whether to submit another change.
+
+**Friend requests.** The Friends directory and the iPad account dashboard open
+the same inbox. It receives system friend requests from message sync, not
+from manually entered IDs or credentials. Operators can accept a pending
+request once; read-only users can see its status. A successful submission
+is not a confirmed friendship. Sync friends to confirm that the applicant's
+exact account ID appears in the current address book. An uncertain submission
+is never retried automatically. Credential storage requires the configured
+`ABOT_PLUGIN_SECRET_KEY`; without it, a request is visible but not actionable.
+
+**Group announcements.** In Group management, open a group's **Profile**
+and select **Sync group details**. This reads the announcement for that group;
+opening the page or receiving messages does not fetch it. A failed read keeps
+the last known text and fetch time. An explicitly empty announcement clears
+the snapshot. This operation does not publish or edit announcements.
+
+**Send a file.** Choose **File** in the message composer to send a nonempty
+attachment up to 25 MiB. Standard plugin `file_reply(file_name=..., file_url=...)`
+uses the same native attachment delivery; its public HTTP(S) URL must be
+reachable from Fulcrum. File uploads need no public Fulcrum URL. A successful
+upload alone does not confirm the message was sent. Check the conversation
+before resending after a timeout or incomplete receipt.
+
+**Send a video.** Select **Video** and choose a browser-playable MP4 up to
+25 MiB. The composer prepares a JPEG cover and the duration locally. Plugins
+use `video_reply(video_base64=clip, cover_base64=cover, play_length=seconds)`
+with base64-encoded MP4 and JPEG or PNG data (cover limit: 2 MiB). The 874 implementation
+that returns only the thumbnail upload receipt cannot confirm video delivery:
+Fulcrum shows an unconfirmed result and does not automatically resend. Check
+the destination conversation before submitting the clip again.
+
+**Send a sticker.** Use the sticker button in the existing conversation and
+choose a GIF, PNG or WebP file, up to 8 MiB. Plugins can return a standard
+`emoji_reply(base64_data=...)`. Fulcrum sends the original bytes to the
+provider's `UploadEmojiData` endpoint. The send is unconfirmed if the provider
+does not return a matching final item with a native message ID. Check the
+conversation before sending again.
+
+Manual and plugin group invitations check the business return code and the
+status of every requested member. A confirmed invitation is not proof of group
+membership. After a timeout, partial response or mismatched recipient, check
+WeChat before trying again. Invitations do not update the roster or send a
+welcome card.
+
+To change the actual WeChat group name, open **Group management > Group details >
+Profile** as a tenant operator or administrator. This does not change the local
+remark. The connected iPad account must be present in the current group roster
+as the owner or an administrator. Fulcrum checks the current name before writing
+and reads the same group again to confirm the new name. A timeout or inconclusive
+result is not retried automatically; use **Sync current group** to check it.
+
+Configure welcome cards under **Group management > Group features > Member change notifications**. The iPad and WeBridge channels use the same per-group settings. No plugin binding is required. For iPad, only identified members in a recognized inbound membership system notification can trigger a join or leave event. Plain text and roster refreshes do not send welcome cards.
+
+Fulcrum matches group profiles by channel and group ID, not by name. Only a successful, versioned member response for the requested group with a positive count and a complete list of distinct personal IDs can mark absent members as having left. Invalid or stale responses leave the last accepted roster in place. Group settings and invitation history survive refreshes. A system notification can trigger a refresh, but is not evidence that its sender is a current member.
+
 ## 常见问题
 
 ### 所选地区没有可用代理

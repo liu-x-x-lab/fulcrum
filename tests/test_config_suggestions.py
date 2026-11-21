@@ -12,6 +12,8 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from app.services.plugin_schemas import build_plugin_config_view
 from test_select_layout import browser  # noqa: F401
 
+expect = pytest.importorskip("playwright.sync_api").expect
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -89,7 +91,8 @@ def test_duplicate_names_reset_and_search_text_never_becomes_form_value(form_pag
     assert page.locator('[name="schema__app_id"]').input_value() == "wx485a97c844086dc9"
     page.get_by_role("button", name="重置", exact=True).click()
     page.wait_for_function("document.querySelector('[name=schema__app_id]').value === 'wx904fb3ecf62c7dea'")
-    assert combo.input_value() == "汽水音乐"
+    # 原生字段先重置，增强组件在事件结束后同步；等待显示值，而不是抢读中间空值。
+    expect(combo).to_have_value("汽水音乐")
 
 
 def test_keyboard_navigation_keeps_the_page_still_and_escape_closes(form_page):

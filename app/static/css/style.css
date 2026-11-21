@@ -2242,6 +2242,125 @@ code {
   font-size: 12px;
 }
 
+.ai-provider-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.ai-provider-row .record-primary > span,
+.ai-provider-models {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.media-library-bar, .media-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 20px 0;
+}
+/* 批量操作共享居中轴；窄屏自然换行，复选框与文字也保持垂直居中。 */
+.media-library-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.media-library-actions form { display: flex; align-items: center; margin: 0; }
+.media-library-actions .checkbox-field { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
+.media-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.media-grid.is-masonry { grid-auto-rows: 1px; grid-auto-flow: row dense; row-gap: 0; }
+.media-tile { position: relative; min-width: 0; align-self: start; }
+.media-tile:has(.media-info[open]) { z-index: 5; }
+.media-preview {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-muted);
+  color: var(--text-soft);
+}
+.media-open { position: relative; display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.media-open:focus-visible { outline: 2px solid var(--primary); outline-offset: -4px; }
+.media-open img { display: block; width: 100%; height: auto; }
+.media-open img[hidden] { display: none; }
+.media-tile-video .media-open { min-height: 160px; }
+.media-tile-video .media-open:has(img:not([hidden])) { min-height: 0; }
+.media-tile-audio .media-preview, .media-tile-file .media-preview { padding: 60px 12px 18px; min-height: 132px; }
+.media-video-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-soft);
+}
+.media-preview audio { width: 100%; min-width: 0; }
+.media-play-error { padding: 0 10px; font-size: 12px; }
+/* 文件信息浮层不占瀑布流高度，点击和键盘都能打开；同一时间只展开一项。 */
+/* 图片上的选择与信息入口不绘制外框，仍保留 44px 点击区域和键盘焦点。 */
+.media-info { position: absolute; inset: 8px 8px auto; pointer-events: none; }
+.media-info summary {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-left: auto;
+  color: var(--text);
+  font-size: 22px;
+  list-style: none;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.media-info summary::-webkit-details-marker { display: none; }
+.media-info summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.media-info-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 14px;
+  max-height: min(340px, 60vh);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  pointer-events: auto;
+}
+.media-file-title, .media-file-meta { overflow-wrap: anywhere; min-width: 0; }
+.media-file-meta { display: grid; gap: 3px; color: var(--muted); font-size: 12px; }
+.media-tile-select {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  cursor: pointer;
+}
+.media-tile-select input, .media-library-bar input { width: 18px; height: 18px; margin: 0; }
+.media-tile:has([data-media-select]:checked) .media-preview { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+.media-pagination { justify-content: center; margin-bottom: 0; }
+.media-grid > .wechat-empty { grid-column: 1 / -1; }
+.media-dedup-name { overflow-wrap: anywhere; white-space: normal; }
+@media (max-width: 1100px) {
+  .media-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 820px) {
+  .media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .media-library .btn { min-height: 44px; }
+}
+@media (max-width: 560px) {
+  .media-grid { grid-template-columns: minmax(0, 1fr); }
+  .media-tile-select input, .media-library-bar input { min-width: 24px; min-height: 24px; }
+}
+
 .record-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
@@ -5283,6 +5402,10 @@ code {
     gap: 12px 16px;
   }
 
+  .ai-provider-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .account-record-row {
     grid-template-columns: minmax(0, 1fr) auto;
   }
@@ -8047,6 +8170,78 @@ a.msg-card:hover,
   background: var(--surface-muted);
 }
 
+/* 公众号推送使用同一容器保留文章顺序；首篇大封面，后续文章紧凑排列。 */
+.msg-articles {
+  width: 320px;
+  max-width: 100%;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+}
+
+.msg-article {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.msg-article + .msg-article,
+.msg-articles-source {
+  border-top: 1px solid var(--border);
+}
+
+.msg-article:first-child {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.msg-article-cover,
+.msg-card-cover {
+  flex: 0 0 56px;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.msg-article:first-child .msg-article-cover {
+  flex: none;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+}
+
+.msg-article:not(:first-child) .msg-article-cover {
+  order: 1;
+  margin-left: auto;
+}
+
+.msg-article .msg-card-copy strong {
+  display: block;
+  overflow: visible;
+}
+
+.msg-articles-source {
+  padding: 8px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+a.msg-article:hover {
+  background: var(--surface-soft);
+}
+
+a.msg-article:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
 /* 媒体占位:获取中的提示文字轻微闪动,失败变红 */
 .msg-media.is-loading .msg-media-copy small {
   color: var(--primary-strong);
@@ -8217,13 +8412,11 @@ html.has-lightbox {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  height: 100%;
-  padding: 56px 72px;
-  box-sizing: border-box;
+  position: absolute;
+  inset: 56px 72px 92px;
+  overflow: hidden;
 }
 
-.app-lightbox-stage img,
 .app-lightbox-stage video {
   max-width: 100%;
   max-height: 100%;
@@ -8231,6 +8424,52 @@ html.has-lightbox {
   background: #000;
   object-fit: contain;
 }
+
+/* 图片布局使用原尺寸，缩放只通过 transform，1:1 不受 max-width 影响。 */
+.app-lightbox-stage img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: none;
+  max-height: none;
+  user-select: none;
+  touch-action: none;
+  transform-origin: center;
+  /* 缩放/拖动是直接操作，不应被全站 reduced-motion 的短过渡延迟。 */
+  transition-property: none;
+}
+.app-lightbox-stage.is-pannable img { cursor: grab; }
+.app-lightbox-stage.is-dragging img { cursor: grabbing; }
+.app-lightbox-toolbar {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-soft);
+}
+.app-lightbox-toolbar[hidden] { display: none; }
+.app-lightbox-toolbar button {
+  min-width: 44px;
+  height: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.app-lightbox-toolbar button:hover { background: var(--primary-soft); }
+.app-lightbox button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.app-lightbox button:disabled { opacity: 0.45; cursor: default; }
+.app-lightbox-zoom { min-width: 48px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
 
 .app-lightbox-error {
   color: #fff;
@@ -8240,6 +8479,7 @@ html.has-lightbox {
 .app-lightbox-close,
 .app-lightbox-nav {
   position: absolute;
+  z-index: 2;
   display: grid;
   place-items: center;
   border: 0;
@@ -8287,7 +8527,7 @@ html.has-lightbox {
 
 .app-lightbox-counter {
   position: absolute;
-  bottom: 18px;
+  bottom: 8px;
   left: 50%;
   transform: translateX(-50%);
   padding: 4px 12px;
@@ -8299,8 +8539,9 @@ html.has-lightbox {
 
 @media (max-width: 640px) {
   .app-lightbox-stage {
-    padding: 56px 12px;
+    inset: 64px 12px 100px;
   }
+  .app-lightbox-close { width: 44px; height: 44px; }
 }
 
 /* 一行控件(.row-controls):状态标签、开关、按钮并排时垂直居中、高度统一。
@@ -8865,6 +9106,15 @@ html.has-lightbox {
   flex-wrap: wrap;
   justify-content: flex-start;
   gap: 6px;
+}
+
+/* 卸载放在卡片操作尾部，沿用按钮尺寸和危险色；确认前不增加重复说明。 */
+.pp-uninstall {
+  margin-inline-start: auto;
+}
+
+.pp-uninstall button {
+  color: var(--danger);
 }
 
 .pp-dialog {

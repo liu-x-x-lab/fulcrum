@@ -4,17 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.time import now_shanghai
-from app.models.entities import Channel, Chatroom
+from app.models.entities import Channel
 from app.services.channel_events import ingest_inbound_event
 from app.services.wechat_ipad.chatrooms import upsert_wechat_ipad_chatroom_profile
 from app.services.wechat_ipad.client import WechatIpadApiClient
 from app.services.wechat_ipad.common import _parse_json, _resolve_wxid
 from app.services.wechat_ipad.contract import IPAD_874_CONTRACT
-from app.services.wechat_ipad.events import _collect_chatroom_sync_candidates_from_results
+from app.services.wechat_ipad.operations.friend_requests import contains_request, receive
 from app.services.wechat_ipad.runtime import _persist_runtime
 from app.services.wechat_ipad.transport import _safe_call, logger
 from app.services.wechat_ipad.views.account import _build_pull_summary
@@ -54,39 +53,38 @@ def pull_wechat_ipad_messages(
             db,
             channel,
             summary="Msg/Sync 调用失败。",
-            error=response["error"],
+            error="message_sync_failed",
             error_context=response.get("error_context"),
             sync_at=now_shanghai(),
             extra={
-                "last_message_sync_response": response.get("payload"),
+                "last_message_sync_response": {"success": False},
                 "reconnect_status": "required",
             },
         )
 
     payload = response["payload"]
     sync_fields = WechatIpadApiClient.extract_sync_fields(payload)
-    data = sync_fields["data"]
     messages = sync_fields["list"]
     ingested = 0
     deduplicated = 0
-    ingest_results: list[dict[str, Any]] = []
+    signals: list[dict[str, Any]] = []
+    regular = []
     for item in messages:
-        result = ingest_inbound_event(db, channel, item, source="wechat_ipad_sync")
-        ingest_results.append(result)
-        deduplicated += 1 if result["deduplicated"] else 0
-        ingested += 1 if result["mapped"] and not result["deduplicated"] else 0
+        if contains_request(item):
+            receive(db, channel, wxid, item)
+            continue
+        regular.append(item)
+        result = ingest_inbound_event(db, channel, item, source="wechat_ipad_sync", ipad_group_signals=signals)
+        deduplicated += bool(result.get("deduplicated"))
+        ingested += bool(result["mapped"] and not result.get("deduplicated"))
 
-    chatroom_sync_candidates = _collect_chatroom_sync_candidates_from_results(
-        db,
-        channel,
-        ingest_results,
-    )
+    targets = list(dict.fromkeys(group for signal in signals for group in signal["chatroom_ids"]))
     chatroom_sync_summary = ""
-    if chatroom_sync_candidates["chatroom_ids"]:
+    if targets:
         sync_wechat_ipad_chatrooms(
             db,
             channel,
-            chatroom_ids=chatroom_sync_candidates["chatroom_ids"],
+            chatroom_ids=targets,
             client=api_client,
         )
         db.refresh(channel)
@@ -99,16 +97,16 @@ def pull_wechat_ipad_messages(
         summary=f"已按 Msg/Sync 拉取 {len(messages)} 条消息，新增 {ingested} 条。",
         sync_at=now_shanghai(),
         extra={
-            "last_message_sync_response": payload,
+            "last_message_sync_response": {"success": True},
             "last_message_sync_count": len(messages),
             "last_message_sync_ingested": ingested,
             "last_message_sync_deduplicated": deduplicated,
-            "last_pull_protocol_summary": _build_pull_summary(messages, sync_fields),
+            "last_pull_protocol_summary": {**_build_pull_summary(regular, sync_fields), "message_count": len(messages)},
             "sync_key": sync_fields["sync_key"] or runtime_info.get("sync_key") or "",
             "sync_continue_flag": sync_fields["continue_flag"],
-            "last_message_sync_chatroom_candidates": chatroom_sync_candidates["signals"],
-            "last_message_sync_chatroom_candidate_count": len(chatroom_sync_candidates["chatroom_ids"]),
-            "last_message_sync_chatroom_sync_triggered": bool(chatroom_sync_candidates["chatroom_ids"]),
+            "last_message_sync_chatroom_candidates": list({s["chatroom_id"]: s for s in signals}.values()),
+            "last_message_sync_chatroom_candidate_count": len(targets),
+            "last_message_sync_chatroom_sync_triggered": bool(targets),
             "last_message_sync_chatroom_sync_summary": chatroom_sync_summary or None,
         },
         error=None,
@@ -121,7 +119,7 @@ def sync_wechat_ipad_chatrooms(
     db: Session,
     channel: Channel,
     *,
-    chatroom_ids: list[str] | None = None,
+    chatroom_ids: list[str],
     client: WechatIpadApiClient | None = None,
 ) -> dict[str, Any]:
     api_client = client or WechatIpadApiClient()
@@ -149,19 +147,7 @@ def sync_wechat_ipad_chatrooms(
             extra={"last_chatroom_sync_summary": "群资料同步被阻塞：缺少 wxid。"},
         )
 
-    if chatroom_ids:
-        targets = [str(item or "").strip() for item in chatroom_ids if str(item or "").strip()]
-    else:
-        targets = [
-            item.external_id
-            for item in db.scalars(
-                select(Chatroom)
-                .where(Chatroom.channel_id == channel.id)
-                .order_by(Chatroom.updated_at.desc(), Chatroom.id.desc())
-                .limit(20)
-            ).all()
-            if str(item.external_id or "").strip()
-        ]
+    targets = [str(item or "").strip() for item in chatroom_ids if str(item or "").strip()]
 
     deduped_targets: list[str] = []
     seen: set[str] = set()
@@ -193,6 +179,10 @@ def sync_wechat_ipad_chatrooms(
     sync_started_at = now_shanghai()
 
     for chatroom_id in deduped_targets:
+        if not chatroom_id.endswith("@chatroom") or len(chatroom_id) > 128 or "," in chatroom_id:
+            failed_targets.append({"chatroom_id": chatroom_id, "stage": "profile", "error": "invalid_target"})
+            continue
+        requested_at = now_shanghai()
         logger.info(
             "wechat ipad chatroom sync target started",
             extra={"channel_id": channel.id, "chatroom_id": chatroom_id, "wxid": wxid},
@@ -205,14 +195,6 @@ def sync_wechat_ipad_chatrooms(
             wxid=wxid,
             chatroom_id=chatroom_id,
         )
-        if not info_result["ok"]:
-            logger.warning(
-                "wechat ipad chatroom profile sync failed",
-                extra={"channel_id": channel.id, "chatroom_id": chatroom_id, "error": str(info_result["error"] or "")},
-            )
-            failed_targets.append({"chatroom_id": chatroom_id, "stage": "profile", "error": str(info_result["error"] or "")})
-            continue
-
         member_result = _safe_call(
             api_client.get_chatroom_member_detail,
             stage="chatroom_member_sync",
@@ -221,35 +203,28 @@ def sync_wechat_ipad_chatrooms(
             wxid=wxid,
             chatroom_id=chatroom_id,
         )
-        upsert_wechat_ipad_chatroom_profile(
+        profile_state, roster_state = upsert_wechat_ipad_chatroom_profile(
             db,
             channel,
             chatroom_external_id=chatroom_id,
-            profile_payload=info_result["payload"],
+            profile_payload=info_result["payload"] if info_result["ok"] else None,
             member_payload=member_result["payload"] if member_result["ok"] else None,
-            synced_at=sync_started_at,
+            synced_at=requested_at,
             source="wechat_ipad_chatroom_sync",
         )
-        synced_profiles += 1
-        synced_members += 1 if member_result["ok"] else 0
-        if not member_result["ok"]:
-            logger.warning(
-                "wechat ipad chatroom member sync failed",
-                extra={"channel_id": channel.id, "chatroom_id": chatroom_id, "error": str(member_result["error"] or "")},
-            )
-            failed_targets.append({"chatroom_id": chatroom_id, "stage": "members", "error": str(member_result["error"] or "")})
-        else:
-            logger.info(
-                "wechat ipad chatroom sync target completed",
-                extra={"channel_id": channel.id, "chatroom_id": chatroom_id, "members_synced": True},
-            )
+        synced_profiles += profile_state == "applied"
+        synced_members += roster_state == "applied"
+        for stage, state, result in (("profile", profile_state, info_result), ("members", roster_state, member_result)):
+            if state not in {"applied", "unchanged"}:
+                failed_targets.append({"chatroom_id": chatroom_id, "stage": stage,
+                                       "error": state if result["ok"] else "provider_call_failed"})
 
     summary = (
         f"已同步 {len(deduped_targets)} 个群目标，成功补齐群资料 {synced_profiles} 个，"
         f"成功补齐成员快照 {synced_members} 个。"
     )
     if failed_targets:
-        summary += f" 其中 {len(failed_targets)} 个目标仍需继续对齐。"
+        summary += f" 其中 {len({item['chatroom_id'] for item in failed_targets})} 个目标仍需继续对齐。"
 
     state = _persist_runtime(
         db,

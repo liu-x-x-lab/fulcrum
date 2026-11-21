@@ -28,7 +28,6 @@ PRIVATE_PLUGIN_CODES = {item.strip() for item in os.environ.get("FULCRUM_PRIVATE
 # 不允许因为某个插件暂时未配置第三方凭证就把目录从正式交付范围中排除。
 TARGET_PLUGIN_CODES = {
     "ai_auto_response",
-    "ai_gen_image",
     "codex_quota_allocator",
     "daily_news",
     "daily_ranking",
@@ -46,6 +45,7 @@ TARGET_PLUGIN_CODES = {
     "group_virtual",
     "gscore_adapter",
     "guess_song",
+    "image_source_search",
     "jd_sign_token",
     "lucky_pot",
     "maibot_adapter",
@@ -55,6 +55,7 @@ TARGET_PLUGIN_CODES = {
     "message_sign",
     "message_summary",
     "music",
+    "moviepilot",
     "newapi_coupon",
     "point_trade",
     "robot_menu",
@@ -64,11 +65,12 @@ TARGET_PLUGIN_CODES = {
 }
 
 # 这几个目录是面向运营方的自有业务插件，和上面的内置插件一样必须满足同一目录契约。
-SAAS_OWN_PLUGIN_CODES = {"customer_operations", "supplier_order_flow", "idiom_guess", "guess_image"}
+SAAS_OWN_PLUGIN_CODES = {"article_summary", "customer_operations", "supplier_order_flow", "idiom_guess", "guess_image"}
 
 # 平台原生能力不能重新以目录插件形式出现。平台管理、统计、运维和群级作用域
 # 已经有唯一的页面和服务入口，不再提供同名的目录插件。
 FORBIDDEN_PLUGIN_CODES = {
+    "ai_gen_image",
     "plugin_manager",
     "stats_collector",
     "system_updater",
@@ -181,6 +183,9 @@ def _validate_python_entry(plugin_code: str, entrypoint_path: Path, errors: list
         if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             allowed_internal = {
                 f"plugins.{plugin_code}.service",
+                f"plugins.{plugin_code}.client",
+                f"plugins.{plugin_code}.state",
+                f"plugins.{plugin_code}.notifications",
                 f"plugins.{plugin_code}.parsers",
                 f"plugins.{plugin_code}.a_bogus",
                 "plugins._shared",

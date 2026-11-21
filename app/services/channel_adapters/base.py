@@ -47,6 +47,11 @@ class BaseChannelAdapter(ABC):
             "error_message": "当前渠道不支持邀请成员加入群聊",
         }
 
+    def remove_group_member(self, channel: Channel, *, chatroom_external_id: str,
+                            member_external_id: str, request_id: str) -> dict[str, Any]:
+        """默认不支持移除成员，不能将未实现的渠道能力报告为成功。"""
+        return {"ok": False, "status": "unsupported", "error_message": "当前渠道未接入踢人能力"}
+
     def health_check(self, channel: Channel) -> dict[str, Any]:
         return {
             "ok": True,

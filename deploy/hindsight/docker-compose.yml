@@ -1,6 +1,6 @@
 # Hindsight(AI 记忆系统)部署:外部 PostgreSQL(pgvector)+ Hindsight 完整镜像。
 # 用法:cp .env.example .env 并填好,然后 docker compose up -d。
-# 管理界面 9999 对局域网开放(需登录密钥),API 8888 只监听 127.0.0.1;multi-bot-saas 的 app 容器通过共享网络用 http://hindsight:8888 访问。
+# 管理界面 9999 对局域网开放(需登录密钥),API 8888 只监听 127.0.0.1;fulcrum 的 app 容器通过共享网络用 http://hindsight:8888 访问。
 services:
   hindsight-db:
     build:
@@ -74,7 +74,7 @@ services:
 networks:
   appnet:
     external: true
-    name: multi-bot-saas_default
+    name: fulcrum_default
 
 volumes:
   hindsight-pg:

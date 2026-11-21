@@ -383,30 +383,12 @@ def _build_wechat_ipad_action_console(channel: Channel, runtime_info: dict[str, 
                 },
             },
             {
-                "key": "get_chatroom_announce",
-                "label": "获取群公告",
-                "description": "验证群资料详情接口返回结构。",
-                "sample_payload": {
-                    "chatroom_id": "123456@chatroom",
-                },
-            },
-            {
                 "key": "invite_chatroom_member",
                 "label": "邀请群成员",
                 "description": "运维侧邀请成员入群，需显式提供群 ID 和 wxid 列表。",
                 "sample_payload": {
                     "chatroom_id": "123456@chatroom",
                     "to_wxids": ["wxid_demo_member_001"],
-                },
-            },
-            {
-                "key": "accept_friend",
-                "label": "通过好友申请",
-                "description": "根据 abot client 口径传 scene / v1 / v2。",
-                "sample_payload": {
-                    "scene": 17,
-                    "v1": "encryptusername",
-                    "v2": "ticket",
                 },
             },
             {

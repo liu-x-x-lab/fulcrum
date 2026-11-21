@@ -258,7 +258,8 @@ def test_ipad_failed_group_targets_return_json_failure(webridge_group, monkeypat
             "runtime_info": {"last_chatroom_sync_failed_targets": ["1@chatroom"]},
         }
 
-    monkeypatch.setattr(channel_actions, "sync_wechat_ipad_chatrooms", failed_sync)
+    monkeypatch.setattr(channel_actions, "sync_group_directory", lambda *_: {
+        "last_status_summary": "群目录同步未完成", "runtime_info": {"last_error": "读取通讯录失败"}})
     monkeypatch.setattr(chatroom_management, "sync_wechat_ipad_chatrooms", failed_sync)
     for path in (f"/channels/{channel_id}/wechat-ipad/sync-chatrooms", f"/channels/{channel_id}/chatrooms/{room_id}/sync"):
         response = client.post(path, headers=_headers(csrf))

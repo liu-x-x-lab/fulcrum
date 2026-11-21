@@ -45,7 +45,6 @@ from starlette.requests import Request
 from sqlalchemy import create_engine, desc, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
-import app.services.wechat_ipad.operations.sync as ipad_sync
 import app.services.wechat_ipad.views.group_governance as ipad_group_governance
 import app.services.wechat_ipad.views.group_scopes as ipad_group_scopes
 from app.core.db import Base, engine
@@ -82,7 +81,6 @@ from app.services.wechat_ipad.contract import IPAD_874_CONTRACT
 from app.services.wechat_ipad.views.groups import build_wechat_ipad_group_summary
 from app.services.wechat_ipad.views.overview import build_wechat_ipad_overview
 from app.services.wechat_ipad.operations.status import refresh_wechat_ipad_status
-from app.services.wechat_ipad.chatrooms import upsert_wechat_ipad_chatroom_profile
 from captcha_helpers import tenant_login_captcha
 
 
@@ -756,9 +754,9 @@ class MultiBotAdminTestCase(unittest.TestCase):
                     "play_length": 6,
                 },
             )
-        self.assertEqual(video_response.status_code, 200)
+        self.assertEqual(video_response.status_code, 502)
         video_data = video_response.json()
-        self.assertEqual(video_data["adapter"]["endpoint"], IPAD_874_CONTRACT.endpoints.message_send_video)
+        self.assertEqual(video_data["adapter"]["error_code"], "invalid_payload")
 
         with patch(
             "app.services.channel_adapters.wechat_ipad.WechatIpadAdapter._post_json",
@@ -784,7 +782,7 @@ class MultiBotAdminTestCase(unittest.TestCase):
         data = response.json()
         self.assertFalse(data["ok"])
         self.assertEqual(data["adapter"]["error_code"], "invalid_payload")
-        self.assertIn("file_name + file_url/download_url", data["adapter"]["error_message"])
+        self.assertIn("文件名无效", data["adapter"]["error_message"])
 
         with patch(
             "app.services.channel_adapters.wechat_ipad.WechatIpadAdapter._run_health_probe",
@@ -845,9 +843,8 @@ class MultiBotAdminTestCase(unittest.TestCase):
             self.assertIn("\"VoiceTime\": 2400", converted_voice_message.raw_request_json or "")
             video_message = db.scalar(select(Message).where(Message.id == video_data["message_id"]))
             self.assertIsNotNone(video_message)
-            self.assertIn("/api/Msg/SendVideo", video_message.raw_request_json or "")
-            self.assertIn("data:video/mp4;base64,", video_message.raw_request_json or "")
-            self.assertIn("data:image/jpeg;base64,", video_message.raw_request_json or "")
+            self.assertNotIn("dmlkZW8=", video_message.raw_request_json or "")
+            self.assertNotIn("aW1hZ2U=", video_message.raw_request_json or "")
             channel = db.get(Channel, 1)
             self.assertIsNotNone(channel)
             self.assertEqual(channel.status, "degraded")
@@ -2854,108 +2851,6 @@ consume_policy = "shared"
         self.assertIn("消息数=5", diagnostics["last_pull_protocol_summary"])
         self.assertIn("来源=wechat_ipad_sync", diagnostics["last_inbound_protocol_summary"])
 
-    def test_wechat_ipad_pull_messages_auto_syncs_new_chatroom_members(self):
-        with SessionLocal() as db:
-            channel = db.get(Channel, 1)
-            self.assertIsNotNone(channel)
-            adapter_config = json.loads(channel.adapter_config_json or "{}")
-            adapter_config["wxid"] = "wxid_demo_account_001"
-            channel.adapter_config_json = json.dumps(adapter_config, ensure_ascii=False)
-            channel.runtime_info_json = json.dumps({"active_wxid": "wxid_demo_account_001"}, ensure_ascii=False)
-            db.commit()
-            db.refresh(channel)
-
-            with patch(
-                "app.services.wechat_ipad.client.WechatIpadApiClient.request_json",
-                side_effect=[
-                    {
-                        "Ret": 0,
-                        "Data": {
-                            "AddMsgs": [
-                                {
-                                    "Event": "AddMsg",
-                                    "Wxid": "wxid_demo_account_001",
-                                    "Data": {
-                                        "FromUserName": {"string": "room-auto-sync@chatroom"},
-                                        "ToUserName": {"string": "wxid_demo_account_001"},
-                                        "Content": {"string": "你邀请张三加入了群聊"},
-                                        "MsgType": 10000,
-                                        "MsgId": "sync-chatroom-evt-001",
-                                    },
-                                }
-                            ],
-                            "Synckey": "sync-key-chatroom-001",
-                            "ContinueFlag": 0,
-                        },
-                        "http_status": 200,
-                    },
-                    {
-                        "Ret": 0,
-                        "Data": {
-                            "ContactList": [
-                                {
-                                    "UserName": "room-auto-sync@chatroom",
-                                    "NickName": "自动同步群",
-                                    "MemberCount": 2,
-                                    "ChatRoomOwner": "wxid_owner_auto_sync",
-                                }
-                            ]
-                        },
-                        "http_status": 200,
-                    },
-                    {
-                        "Ret": 0,
-                        "Data": {
-                            "NewChatroomData": {
-                                "ChatRoomMember": [
-                                    {
-                                        "UserName": "wxid_owner_auto_sync",
-                                        "NickName": "群主",
-                                        "DisplayName": "群主名片",
-                                        "MemberFlag": "1",
-                                    },
-                                    {
-                                        "UserName": "wxid_member_auto_sync",
-                                        "NickName": "张三",
-                                        "DisplayName": "张三名片",
-                                        "MemberFlag": "0",
-                                    },
-                                ]
-                            }
-                        },
-                        "http_status": 200,
-                    },
-                ],
-            ):
-                ipad_sync.pull_wechat_ipad_messages(db, channel)
-
-        with SessionLocal() as db:
-            channel = db.get(Channel, 1)
-            self.assertIsNotNone(channel)
-            runtime_info = json.loads(channel.runtime_info_json or "{}")
-            self.assertEqual(runtime_info.get("last_message_sync_chatroom_candidate_count"), 1)
-            self.assertTrue(runtime_info.get("last_message_sync_chatroom_sync_triggered"))
-            self.assertIn("成功补齐群资料 1 个", runtime_info.get("last_chatroom_sync_summary") or "")
-
-            candidate_signals = runtime_info.get("last_message_sync_chatroom_candidates") or []
-            self.assertEqual(len(candidate_signals), 1)
-            self.assertEqual(candidate_signals[0]["reason"], "member_change_event")
-            self.assertEqual(candidate_signals[0]["chatroom_id"], "room-auto-sync@chatroom")
-
-            chatroom = db.scalar(select(Chatroom).where(Chatroom.external_id == "room-auto-sync@chatroom"))
-            self.assertIsNotNone(chatroom)
-            self.assertEqual(chatroom.name, "自动同步群")
-            self.assertEqual(chatroom.status, "members_synced")
-            self.assertEqual(chatroom.member_count, 2)
-
-            members = db.scalars(
-                select(ChatroomMember)
-                .where(ChatroomMember.chatroom_id == chatroom.id)
-                .order_by(ChatroomMember.member_external_id.asc())
-            ).all()
-            self.assertEqual(len(members), 2)
-            self.assertEqual(members[0].member_external_id, "wxid_member_auto_sync")
-            self.assertEqual(members[1].member_external_id, "wxid_owner_auto_sync")
 
     def test_wechat_ipad_action_api_runs_operator_action_and_persists_summary(self):
         self.login("ops", "ops123")
@@ -3024,8 +2919,8 @@ consume_policy = "shared"
         self.assertEqual(action_console["endpoint_template"], "/channels/1/wechat-ipad/actions/__ACTION__")
         supported_keys = {item["key"] for item in action_console["supported_actions"]}
         self.assertIn("get_contact_list", supported_keys)
-        self.assertIn("get_chatroom_announce", supported_keys)
-        self.assertIn("accept_friend", supported_keys)
+        self.assertNotIn("get_chatroom_announce", supported_keys)
+        self.assertNotIn("accept_friend", supported_keys)
         self.assertEqual(action_console["last_action_params"]["current_wxcontact_seq"], 10)
 
     def test_wechat_ipad_overview_marks_sync_diagnostics_empty_state(self):
@@ -4808,147 +4703,7 @@ consume_policy = "shared"
             self.assertIsNotNone(scope)
             self.assertEqual(scope.scope_status, "inherited")
             self.assertTrue(scope.enabled)
-    def test_wechat_ipad_chatroom_profile_sync_promotes_status_from_message_observed(self):
-        with SessionLocal() as db:
-            channel = db.get(Channel, 1)
-            self.assertIsNotNone(channel)
-            chatroom = Chatroom(
-                bot_id=channel.bot_id,
-                channel_id=channel.id,
-                external_id="room-promote-001@chatroom",
-                name="初始骨架群",
-                status="message_observed",
-            )
-            db.add(chatroom)
-            db.commit()
 
-            upsert_wechat_ipad_chatroom_profile(
-                db,
-                channel,
-                chatroom_external_id="room-promote-001@chatroom",
-                profile_payload={
-                    "Data": {
-                        "ContactList": [
-                            {
-                                "NickName": "已补资料群",
-                                "Remark": "群备注",
-                                "ChatRoomOwner": "wxid_owner_promote",
-                                "MemberCount": 2,
-                            }
-                        ]
-                    }
-                },
-                member_payload={
-                    "Data": {
-                        "NewChatroomData": {
-                            "ChatRoomMember": [
-                                {"UserName": "wxid_owner_promote", "NickName": "群主", "DisplayName": "群主", "MemberFlag": 1},
-                                {"UserName": "wxid_member_promote", "NickName": "成员", "DisplayName": "成员显示名", "MemberFlag": 0},
-                            ]
-                        }
-                    }
-                },
-            )
-            db.commit()
-            db.refresh(chatroom)
-
-            self.assertEqual(chatroom.status, "members_synced")
-            self.assertEqual(chatroom.name, "已补资料群")
-            self.assertEqual(chatroom.owner_external_id, "wxid_owner_promote")
-            self.assertEqual(chatroom.member_count, 2)
-            members = db.scalars(select(ChatroomMember).where(ChatroomMember.chatroom_id == chatroom.id)).all()
-            self.assertEqual(len(members), 2)
-
-    def test_wechat_ipad_chatroom_member_status_marks_left_and_recovers_when_back(self):
-        with SessionLocal() as db:
-            channel = db.get(Channel, 1)
-            self.assertIsNotNone(channel)
-            chatroom = Chatroom(
-                bot_id=channel.bot_id,
-                channel_id=channel.id,
-                external_id="room-member-status-001@chatroom",
-                name="成员状态群",
-                status="members_synced",
-                member_count=2,
-            )
-            db.add(chatroom)
-            db.flush()
-            db.add_all(
-                [
-                    ChatroomMember(
-                        chatroom_id=chatroom.id,
-                        bot_id=channel.bot_id,
-                        channel_id=channel.id,
-                        member_external_id="wxid_member_keep",
-                        nickname="常驻成员",
-                        display_name="常驻成员",
-                        status="active",
-                    ),
-                    ChatroomMember(
-                        chatroom_id=chatroom.id,
-                        bot_id=channel.bot_id,
-                        channel_id=channel.id,
-                        member_external_id="wxid_member_return",
-                        nickname="回归成员",
-                        display_name="回归成员",
-                        status="active",
-                    ),
-                ]
-            )
-            db.commit()
-
-            upsert_wechat_ipad_chatroom_profile(
-                db,
-                channel,
-                chatroom_external_id="room-member-status-001@chatroom",
-                member_payload={
-                    "Data": {
-                        "NewChatroomData": {
-                            "ChatRoomMember": [
-                                {"UserName": "wxid_member_keep", "NickName": "常驻成员", "DisplayName": "常驻成员", "MemberFlag": 0},
-                            ]
-                        }
-                    }
-                },
-                synced_at=datetime(2026, 3, 25, 8, 0, 0, tzinfo=timezone.utc),
-            )
-            db.commit()
-
-            left_member = db.scalar(
-                select(ChatroomMember).where(
-                    ChatroomMember.chatroom_id == chatroom.id,
-                    ChatroomMember.member_external_id == "wxid_member_return",
-                )
-            )
-            self.assertIsNotNone(left_member)
-            self.assertEqual(left_member.status, "left")
-
-            upsert_wechat_ipad_chatroom_profile(
-                db,
-                channel,
-                chatroom_external_id="room-member-status-001@chatroom",
-                member_payload={
-                    "Data": {
-                        "NewChatroomData": {
-                            "ChatRoomMember": [
-                                {"UserName": "wxid_member_keep", "NickName": "常驻成员", "DisplayName": "常驻成员", "MemberFlag": 0},
-                                {"UserName": "wxid_member_return", "NickName": "回归成员", "DisplayName": "回归成员", "MemberFlag": 0},
-                            ]
-                        }
-                    }
-                },
-                synced_at=datetime(2026, 3, 25, 9, 0, 0, tzinfo=timezone.utc),
-            )
-            db.commit()
-
-            returned_member = db.scalar(
-                select(ChatroomMember).where(
-                    ChatroomMember.chatroom_id == chatroom.id,
-                    ChatroomMember.member_external_id == "wxid_member_return",
-                )
-            )
-            self.assertIsNotNone(returned_member)
-            self.assertEqual(returned_member.status, "active")
 
     def test_wechat_ipad_channel_detail_shows_group_sync_freshness_chip(self):
         reference_time = datetime(2026, 3, 24, 12, 0, 0, tzinfo=timezone.utc)

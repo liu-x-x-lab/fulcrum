@@ -415,7 +415,7 @@ def test_dashboard_message_filters_by_conversation_and_sender() -> None:
     from sqlalchemy.orm import Session
 
     from app.models.entities import Chatroom, ChatroomMember, Message, WorkWechatContact
-    from app.services.wechat_webridge.dashboard import build_webridge_dashboard
+    from app.services.account_dashboard import build_account_dashboard
 
     engine = create_engine("sqlite://")
     # 只建总览统计和消息查询用到的表，避免触发全库夹具。
@@ -436,14 +436,14 @@ def test_dashboard_message_filters_by_conversation_and_sender() -> None:
         )
         db.commit()
 
-        everything = build_webridge_dashboard(db, channel, tab="messages")
+        everything = build_account_dashboard(db, channel, tab="messages")
         assert len(everything["rows"]) == 2
-        by_room = build_webridge_dashboard(db, channel, tab="messages", conversation_id=10)
+        by_room = build_account_dashboard(db, channel, tab="messages", conversation_id=10)
         assert [m.content for m in by_room["rows"]] == ["群消息"]
-        by_sender = build_webridge_dashboard(db, channel, tab="messages", sender="老王")
+        by_sender = build_account_dashboard(db, channel, tab="messages", sender="老王")
         assert [m.content for m in by_sender["rows"]] == ["私聊"]
         # 其他渠道的会话 ID 不能被当作筛选条件读出数据。
-        assert build_webridge_dashboard(db, channel, tab="messages", conversation_id=12)["rows"] == []
+        assert build_account_dashboard(db, channel, tab="messages", conversation_id=12)["rows"] == []
         assert {c["id"] for c in everything["conversations"]} == {10, 11}
 
 

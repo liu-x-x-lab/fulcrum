@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
+from sqlalchemy.orm import object_session
 
 from app.models.entities import Chatroom
 from app.services.config_fields import build_sections, has_inputs, read_form
 from app.services.group_features.registry import all_features, get_feature
-from app.services.group_features.store import get_state, has_saved_state, save_state, set_flag
+from app.services.group_features.store import get_state, has_saved_state, ipad_removal_confirmed, save_state, set_flag
+from app.services import ai_providers
 
-def build_feature_cards(chatroom: Chatroom, channel_type: str = "", defaults: Mapping[str, bool] | None = None) -> list[dict[str, Any]]:
+def build_feature_cards(chatroom: Chatroom, channel_type: str = "", defaults: Mapping[str, bool] | None = None,
+                        *, ai_catalog: list | None = None, default_ai_models: list | None = None) -> list[dict[str, Any]]:
     """生成页面渲染用的能力列表:每项含开关状态和按小节分好组、带当前值的配置项。
 
     限定了渠道类型的能力(如自动下载附件)只在对应渠道的群里显示。
@@ -21,9 +24,12 @@ def build_feature_cards(chatroom: Chatroom, channel_type: str = "", defaults: Ma
         if feature.channel_types and channel_type not in feature.channel_types:
             continue
         enabled, config = get_state(chatroom, feature)
+        if feature.key == "moderation" and channel_type == "wechat_ipad" and not ipad_removal_confirmed(chatroom):
+            config["mode"] = "warn"
         if not has_saved_state(chatroom, feature) and defaults and feature.key in defaults:
             enabled = bool(defaults[feature.key])
-        sections = build_sections(feature.fields, config)
+        fields = [item for item in feature.fields if feature.key != "ai_chat" or item.key not in {"provider_id", "model"}]
+        sections = build_sections(fields, config)
         cards.append(
             {
                 "key": feature.key,
@@ -33,6 +39,8 @@ def build_feature_cards(chatroom: Chatroom, channel_type: str = "", defaults: Ma
                 "sections": sections,
                 # 有文本/数字/密钥输入的设置才需要"保存"按钮;只有开关的设置点一下就已保存。
                 "has_inputs": has_inputs(sections),
+                "ai_catalog": ai_catalog or [], "default_ai_models": default_ai_models or [],
+                "provider_id": config.get("provider_id", ""), "model": config.get("model", ""),
             }
         )
     return cards
@@ -48,6 +56,15 @@ def save_from_form(chatroom: Chatroom, feature_key: str, form: Mapping[str, Any]
     if feature is None:
         raise ValueError(f"未知群功能: {feature_key}")
     config = read_form(feature.fields, form)
+    if feature_key == "ai_chat":
+        db = object_session(chatroom)
+        if db is None:
+            raise ValueError("无法核对群的供应商归属")
+        selected, name = ai_providers.validate_selection(db, config.get("provider_id"), config.get("model", ""),
+            required="enabled" in form and bool(config.get("provider_id")))
+        if selected and ai_providers.get_provider(db, selected).tenant_id != chatroom.tenant_id:
+            raise ValueError("供应商不属于当前租户")
+        config["provider_id"], config["model"] = str(selected or ""), name
     enabled = "enabled" in form
     save_state(chatroom, feature_key, enabled=enabled, config=config)
     return f"已{'开启' if enabled else '关闭'}「{feature.name}」"

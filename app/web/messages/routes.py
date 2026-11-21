@@ -29,9 +29,13 @@ from app.services.ops import record_audit
 from app.services.outbound_files import (
     build_public_base_url,
     redact_base64_fields,
+    sanitize_upload_filename,
     store_outbound_upload,
 )
 from app.web.auth_common import require_tenant_csrf
+from app.services.wechat_ipad.files import delivery_name
+from app.services.wechat_ipad import stickers
+from app.services.wechat_ipad.videos import MAX_COVER_BYTES, has_mp4_header
 from app.web.shared.access import enforce_role, get_session
 from app.web.shared.operations import _csrf_from_header
 from app.web.shared.presentation import format_beijing_time, render, templates
@@ -49,6 +53,7 @@ MANUAL_MESSAGE_MAX_CHARS = 2000
 async def send_manual_message_action(
     request: Request, conversation_id: int = Form(...), content: str = Form(""), csrf_token: str = Form(""),
     message_type: str = Form("text"), file: UploadFile | None = File(None),
+    video_cover: UploadFile | None = File(None), play_length: int = Form(0),
     reply_to_id: int = Form(0), mention_ids: str = Form("[]"),
 ):
     """消息中心发送框提交的消息;由页面脚本 fetch 调用,返回 JSON,页面不刷新。
@@ -100,6 +105,8 @@ async def send_manual_message_action(
             except ValueError as exc:
                 return JSONResponse({"ok": False, "notice": str(exc)}, status_code=400)
         if mentions:
+            if channel.channel_type == "wechat_ipad" and reply is not None:
+                return JSONResponse({"ok": False, "notice": "iPad 暂不支持同时引用并 @ 成员"}, status_code=400)
             if not supported["mention"] or normalized_type != "text":
                 return JSONResponse({"ok": False, "notice": "当前渠道不支持此类型的 @ 发送"}, status_code=400)
             if channel.channel_type == "wechat_gugatool" and payload.get("quote_message_id"):
@@ -130,16 +137,41 @@ async def send_manual_message_action(
         if normalized_type in message_actions.MEDIA_TYPES:
             if file is None or not file.filename:
                 return JSONResponse({"ok": False, "notice": "请先选择要发送的文件"}, status_code=400)
+            if channel.channel_type == "wechat_ipad" and normalized_type in {"file", "video"}:
+                try:
+                    delivery_name(sanitize_upload_filename(file.filename))
+                except ValueError as exc:
+                    return JSONResponse({"ok": False, "notice": str(exc)}, status_code=400)
             if channel.channel_type == "wechat_ipad" and normalized_type == "voice" and Path(file.filename).suffix.lower() not in {".silk", ".slik", ".amr", ".wav", ".mp3"}:
                 return JSONResponse({"ok": False, "notice": "当前渠道不支持此语音格式，请选择 SILK、AMR、WAV 或 MP3 文件"}, status_code=400)
-            binary = await file.read(message_actions.MAX_UPLOAD_BYTES + 1)
+            ipad_emoji = channel.channel_type == "wechat_ipad" and normalized_type == "emoji"
+            binary = await file.read((stickers.MAX_BYTES if ipad_emoji else message_actions.MAX_UPLOAD_BYTES) + 1)
+            content_type = file.content_type
+            if ipad_emoji:
+                try:
+                    content_type = stickers.media_type(binary)
+                except ValueError as exc:
+                    return JSONResponse({"ok": False, "notice": str(exc)}, status_code=400)
             if not binary or len(binary) > message_actions.MAX_UPLOAD_BYTES:
                 return JSONResponse({"ok": False, "notice": "文件不能为空，且不能超过 25 MB"}, status_code=400)
-            stored = store_outbound_upload(tenant_id=int(channel.tenant_id), channel_id=int(channel.id), file_name=file.filename, content=binary, content_type=file.content_type, message_type=normalized_type)
+            ipad_video = channel.channel_type == "wechat_ipad" and normalized_type == "video"
+            if ipad_video:
+                cover = await video_cover.read(MAX_COVER_BYTES + 1) if video_cover else b""
+                if (not file.filename.lower().endswith(".mp4") or not has_mp4_header(binary)
+                        or not 0 < len(cover) <= MAX_COVER_BYTES or not 0 < play_length <= 86400):
+                    return JSONResponse({"ok": False, "notice": "请选择带有效封面和时长的 MP4 视频"}, status_code=400)
+            stored = store_outbound_upload(tenant_id=int(channel.tenant_id), channel_id=int(channel.id), file_name=file.filename, content=binary, content_type="video/mp4" if ipad_video else content_type, message_type=normalized_type)
             download_url = f"{build_public_base_url(request)}/outbound-files/{channel.id}/{stored['share_id']}/{quote(stored['file_name'])}"
             payload["file_name"] = stored["file_name"]
             if channel.channel_type in {"wechat_ipad", "telegram"} and normalized_type == "image":
                 payload["image_base64"] = base64.b64encode(binary).decode("ascii")
+            elif channel.channel_type == "wechat_ipad" and normalized_type == "file":
+                payload["file_base64"] = base64.b64encode(binary).decode("ascii")
+            elif ipad_video:
+                payload.update(video_base64=base64.b64encode(binary).decode("ascii"),
+                               image_base64=base64.b64encode(cover).decode("ascii"), play_length=play_length)
+            elif ipad_emoji:
+                payload["emoji_base64"] = base64.b64encode(binary).decode("ascii")
             elif channel.channel_type == "wechat_gugatool":
                 # 咕嘎适配器把内容转成手机要的原始字节；平台对外地址多数是内网地址，
                 # 再按 URL 回抓会被 SSRF 防护拒绝，这里直接传 base64。
@@ -166,6 +198,8 @@ async def send_manual_message_action(
         db.commit()
         record_audit(db, "message.manual-send", "message", message.id, f"conversation={conversation.id}")
         if not adapter_result.get("ok"):
+            if adapter_result.get("external_status") == "unknown":
+                return JSONResponse({"ok": False, "unconfirmed": True, "notice": adapter_result["error_message"], "message_id": int(message.id)})
             notice = f"发送失败：{adapter_result.get('error_message') or adapter_result.get('error_code') or '未知错误'}"
             return JSONResponse({"ok": False, "notice": notice, "message_id": int(message.id)})
         notice = "消息已提交，等待渠道执行" if adapter_result.get("external_status") == "pending" else "消息已发送"

@@ -50,14 +50,24 @@ def _encrypt_config(config: Mapping[str, Any] | None, aad: bytes) -> str | None:
     normalized = _normalize_secret_config(config)
     if not normalized:
         return None
+
+    return encrypt_scoped_json(normalized, aad)
+
+
+def encrypt_scoped_json(value: Mapping[str, Any], aad: bytes) -> str:
+    key = _load_master_key()
     nonce = os.urandom(PLUGIN_SECRET_NONCE_BYTES)
     plaintext = json.dumps(
-        normalized,
+        value,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    ciphertext = AESGCM(_load_master_key()).encrypt(nonce, plaintext, aad)
+    ciphertext = AESGCM(key).encrypt(
+        nonce,
+        plaintext,
+        aad,
+    )
     payload = base64.urlsafe_b64encode(nonce + ciphertext).decode("ascii").rstrip("=")
     return f"{PLUGIN_SECRET_VERSION}.{payload}"
 
@@ -67,6 +77,10 @@ def _decrypt_config(encrypted: str | None, aad: bytes) -> dict[str, Any]:
     if not normalized:
         return {}
 
+    return decrypt_scoped_json(normalized, aad)
+
+
+def decrypt_scoped_json(normalized: str, aad: bytes) -> dict[str, Any]:
     version, separator, payload = normalized.partition(".")
     if separator != "." or version != PLUGIN_SECRET_VERSION or not payload:
         raise PluginSecretError("plugin_secret_version_invalid")
@@ -77,7 +91,11 @@ def _decrypt_config(encrypted: str | None, aad: bytes) -> dict[str, Any]:
             raise PluginSecretError("plugin_secret_payload_invalid")
         nonce = decoded[:PLUGIN_SECRET_NONCE_BYTES]
         ciphertext = decoded[PLUGIN_SECRET_NONCE_BYTES:]
-        plaintext = AESGCM(_load_master_key()).decrypt(nonce, ciphertext, aad)
+        plaintext = AESGCM(_load_master_key()).decrypt(
+            nonce,
+            ciphertext,
+            aad,
+        )
         parsed = json.loads(plaintext.decode("utf-8"))
     except PluginSecretError:
         raise

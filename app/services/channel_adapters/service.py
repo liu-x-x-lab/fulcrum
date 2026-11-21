@@ -64,7 +64,24 @@ def dispatch_outbound_message(
     db.flush()
 
     adapter = get_channel_adapter(channel)
-    adapter_result = adapter.send_message(channel, conversation, normalized_payload)
+    if channel.channel_type == "wechat_ipad" and "reply_to_id" in normalized_payload:
+        from app.services.wechat_ipad.quotes import reference_fields
+
+        try:
+            # 即使插件任务由队列恢复，也重新检查当前会话归属；不能携带原文改投另一目标。
+            key = normalized_payload["reply_to_id"]
+            if type(key) is not int or key <= 0 or message_type != "text" or normalized_payload.get("at"):
+                raise ValueError("引用需要有效的文本原消息，不能同时 @ 成员")
+            if any(normalized_payload.get(k) not in (None, "", conversation.external_id) for k in ("receiver_id", "external_id")):
+                raise ValueError("引用的消息不属于目标会话")
+            normalized_payload["_ipad_quote"] = reference_fields(channel, conversation, db.get(Message, key))
+        except ValueError as exc:
+            adapter_result = {"ok": False, "status": "failed", "error_code": "invalid_quote", "error_message": str(exc)}
+        else:
+            adapter_result = adapter.send_message(channel, conversation, normalized_payload)
+    else:
+        normalized_payload.pop("_ipad_quote", None)
+        adapter_result = adapter.send_message(channel, conversation, normalized_payload)
     if maibot_dispatch is not None and adapter_result.get("ok") and channel.channel_type in {"wechat_webridge", "wechat_gugatool"}:
         from app.services.task_queue import add_internal_job_fields
 
@@ -147,6 +164,8 @@ def _normalize_outbound_payload(channel: Channel, payload: dict[str, Any]) -> di
     normalized_payload = dict(payload)
     channel_type = str(channel.channel_type or "").strip().lower()
     message_type = str(normalized_payload.get("message_type") or "text").strip().lower() or "text"
+    if channel_type == "wechat_ipad" and message_type == "file" and not payload.get("xml"):
+        normalized_payload.setdefault("display_content", payload.get("file_name"))
     if channel_type == "telegram" and message_type == "file":
         xml = str(normalized_payload.get("xml") or "").strip()
         fallback_text = _build_xml_text_fallback(xml)

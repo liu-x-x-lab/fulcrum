@@ -136,7 +136,9 @@ def handle(ctx: FeatureContext, args: str) -> list[dict[str, Any]] | None:
     members = list(parsed["members"])
     new_name = str(parsed.get("new_name") or "")
     directory = ctx.details.get("member_directory")
-    if ctx.channel.channel_type == "wechat_webridge":
+    if ctx.channel.channel_type in {"wechat_webridge", "wechat_ipad"}:
+        if ctx.channel.channel_type == "wechat_ipad" and not isinstance(directory, Mapping):
+            return None
         # 入站事务已更新微桥目录;异步通知不能再写一次,否则会把更新后的资料回滚。
         if isinstance(directory, Mapping) and not directory.get("applied"):
             return None
@@ -144,7 +146,18 @@ def handle(ctx: FeatureContext, args: str) -> list[dict[str, Any]] | None:
         if change_type == "join":
             # 欢迎任务让出队列期间可能又收到退群事件；发送前读取当前成员状态，
             # 避免在退出通知之后再给已经离群的人发送迟到欢迎。
-            members = _current_join_members(ctx.db, ctx.chatroom, members)
+            if ctx.channel.channel_type == "wechat_ipad":
+                # 离群后再次加入时，旧欢迎任务不能借新一次入群的 active 状态重新发送。
+                from app.services.plugin_schemas import parse_config_json
+
+                key = ctx.normalized_event.get("event_key")
+                rows = ctx.db.execute(select(ChatroomMember.member_external_id, ChatroomMember.extra_json).where(
+                    ChatroomMember.chatroom_id == ctx.chatroom.id, ChatroomMember.status == "active",
+                    ChatroomMember.member_external_id.in_([m["external_id"] for m in members])))
+                current = {person for person, extra in rows if key and parse_config_json(extra).get("ipad_membership_event") == key}
+                members = [m for m in members if m["external_id"] in current]
+            else:
+                members = _current_join_members(ctx.db, ctx.chatroom, members)
             if not members:
                 return None
     else:
@@ -314,9 +327,12 @@ def parse_member_change(normalized_event: Mapping[str, Any]) -> dict[str, Any] |
     parsed = _parse_structured_member_change(normalized_event)
     if parsed is not None:
         return parsed
+    if normalized_event.get("adapter_type") == "wechat_ipad":
+        # iPad 入站目录已经检查协议类型、目标群和时序。普通正文及旧事件不能再次解析。
+        return None
     message = normalized_event.get("message") if isinstance(normalized_event, Mapping) else None
     content = str((message or {}).get("content") or "").strip() if isinstance(message, Mapping) else ""
-    return _parse_wechat_member_change(content)
+    return parse_wechat_member_template(content)
 
 
 def _parse_structured_member_change(normalized_event: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -344,10 +360,10 @@ def _parse_structured_member_change(normalized_event: Mapping[str, Any]) -> dict
     return parsed
 
 
-def _parse_wechat_member_change(content: str) -> dict[str, Any] | None:
+def parse_wechat_member_template(content: str, *, exact: bool = False) -> dict[str, Any] | None:
     """把微信协议系统消息转换为与通用渠道一致的成员事件。"""
 
-    if "<sysmsg" not in content:
+    if "<sysmsg" not in content or "<!DOCTYPE" in content or len(content) > 131072:
         return None
     try:
         root = ET.fromstring(content)
@@ -357,7 +373,17 @@ def _parse_wechat_member_change(content: str) -> dict[str, Any] | None:
         return None
     template_node = root.find(".//content_template/template")
     template_text = str(template_node.text or "").strip() if template_node is not None else ""
-    if any(pattern in template_text for pattern in JOIN_PATTERNS):
+    if exact:
+        # 仅取模板指定的变更对象；移出通知没有 names 时不能把执行操作的人当作离群者。
+        if template_text in JOIN_PATTERNS:
+            change_type, link_names = "join", ("adder" if "$adder$" in template_text else "names",)
+        elif template_text in REMOVED_PATTERNS:
+            change_type, link_names = "removed", ("names",)
+        elif template_text in LEAVE_PATTERNS:
+            change_type, link_names = "left", ("names" if "$names$" in template_text else "username",)
+        else:
+            return None
+    elif any(pattern in template_text for pattern in JOIN_PATTERNS):
         link_names = ("names", "adder")
         change_type = "join"
     elif any(pattern in template_text for pattern in REMOVED_PATTERNS):

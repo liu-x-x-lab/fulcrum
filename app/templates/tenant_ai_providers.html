@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% block hero_actions %}
+{% if can_manage and form is none %}<a class="btn" href="/tenant/ai-providers/new">新增供应商</a>{% endif %}
+<a class="btn btn-secondary" href="/tenant/ai">AI 助手</a>
+{% endblock %}
+{% block content %}
+{% if form is not none %}
+<section class="work-surface">
+  <div class="section-head"><h2>{{ '编辑供应商' if form.id else '新增供应商' }}</h2></div>
+  <form method="post" action="/tenant/ai-providers/save" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <input type="hidden" name="provider_id" value="{{ form.id }}" />
+    <label><span>名称</span><input name="name" value="{{ form.name }}" maxlength="100" required /></label>
+    <label><span>接口地址</span><input name="api_base" value="{{ form.api_base }}" placeholder="https://api.example.com/v1" maxlength="255" required /></label>
+    <label class="full-row"><span>API 密钥</span><input name="api_key" type="password" autocomplete="new-password" placeholder="{{ '已配置，留空保持' if form.key_configured else '输入此供应商的密钥' }}" /></label>
+    <p class="full-row muted-text">使用 OpenAI 兼容接口；更换地址必须重新填写密钥。停用会影响引用此供应商的所有能力和群。</p>
+    <label class="checkbox-field"><input type="checkbox" name="enabled"{% if form.enabled %} checked{% endif %} /><span>启用供应商</span></label>
+    {% if form.id %}<label class="checkbox-field"><input type="checkbox" name="clear_key" /><span>清除密钥（需同时停用）</span></label>{% endif %}
+    <label class="full-row"><span>手动模型（每行一个，可选）</span><textarea name="manual_models" rows="5" maxlength="50000" placeholder="供应商提供的模型 ID 或别名">{{ form.manual_models }}</textarea></label>
+    <div class="full-row form-actions-inline"><button class="btn" type="submit">保存</button><a class="btn btn-secondary" href="/tenant/ai-providers">取消</a></div>
+  </form>
+</section>
+{% else %}
+<section class="work-surface">
+  <div class="section-head"><h2>供应商连接</h2></div>
+  <div class="record-list">
+  {% for provider in providers %}
+    <article class="record-row ai-provider-row">
+      <div class="record-primary"><strong>{{ provider.name }}</strong><span>{{ provider.api_base }}</span><span>{{ '已启用' if provider.enabled else '已停用' }} · {{ '密钥已配置' if provider.key_configured else '未配置密钥' }} · {{ provider.models|length }} 个模型</span></div>
+      {% if can_manage %}
+      <div class="form-actions-inline">
+        <a class="btn btn-secondary" href="/tenant/ai-providers/{{ provider.id }}">编辑</a>
+        <form method="post" action="/tenant/ai-providers/{{ provider.id }}/refresh"><input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><button class="btn btn-secondary" type="submit"{% if not provider.enabled or not provider.key_configured %} disabled{% endif %}>刷新模型</button></form>
+        <form method="post" action="/tenant/ai-providers/{{ provider.id }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><button class="btn btn-secondary" type="submit" data-confirm-mode="confirm" data-confirm-tone="danger" data-confirm-title="删除供应商" data-confirm-message="删除连接和保存的密钥；正在使用的供应商不能删除。">删除</button></form>
+      </div>
+      {% endif %}
+      {% if provider.models %}<details class="full-row ai-provider-models"><summary>模型列表</summary><p class="muted-text">{{ provider.models|join('、') }}</p></details>{% endif %}
+    </article>
+  {% else %}<p class="muted-text">尚未配置供应商。添加连接后，可刷新模型列表或手动填写模型。</p>{% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

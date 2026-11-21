@@ -1,0 +1,63 @@
+[plugin]
+code = "moviepilot"
+display_name = "MoviePilot 影视订阅"
+plugin_type = "command"
+version = "1.1.0"
+author = "Fulcrum"
+description = "按片名搜索、查看 Free／折扣资源并确认直接下载，或管理原生电影订阅、接收下载整理通知。订阅按 MP 设置自动下载。"
+default_enabled = false
+
+[capability]
+channel_types = ["wechat_ipad", "wechat_winauto", "wechat_webridge", "telegram", "workwechat", "simulator"]
+chat_types = ["group"]
+message_types = ["text"]
+priority = 90
+consume_policy = "stop"
+timeout_ms = 120000
+
+[matcher]
+commands = ["MP帮助", "搜电影", "选电影", "订阅电影", "找资源", "我的电影订阅", "取消电影订阅", "关注电影", "取消电影关注", "下载资源", "确认下载"]
+keywords = []
+require_mention = false
+
+[runtime]
+notifications_enabled = true
+require_mention = false
+
+[[schedule]]
+action = "poll_notifications"
+kind = "interval"
+default_interval = 300
+min_interval = 300
+max_interval = 300
+enabled_key = "notifications_enabled"
+high_side_effect = true
+
+# 连接地址和密钥作为同一绑定身份加密保存，禁止群覆盖地址后把密钥发送到别处。
+[[config.fields]]
+key = "server_url"
+label = "MoviePilot 地址"
+kind = "secret"
+placeholder = "https://moviepilot.example.test"
+hint = "在机器人配置中填写完整地址；与密钥一起加密保存。"
+group = "连接"
+
+[[config.fields]]
+key = "api_key"
+label = "MoviePilot API Key"
+kind = "secret"
+group = "连接"
+
+[[config.fields]]
+key = "notifications_enabled"
+label = "下载和整理通知"
+kind = "bool"
+default = true
+group = "通知"
+
+[[config.fields]]
+key = "require_mention"
+label = "群里必须 @ 机器人"
+kind = "bool"
+default = false
+group = "触发方式"

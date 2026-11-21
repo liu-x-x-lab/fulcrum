@@ -16,30 +16,6 @@ def _extract_message_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return WechatIpadApiClient.extract_sync_fields(payload)["list"]
 
 
-def _collect_chatroom_sync_candidates_from_results(
-    db: Session,
-    channel: Channel,
-    ingest_results: list[dict[str, Any]],
-) -> dict[str, Any]:
-    chatroom_ids: list[str] = []
-    signals: list[dict[str, str]] = []
-    seen: set[str] = set()
-
-    for result in ingest_results:
-        normalized = result.get("normalized") if isinstance(result, dict) else None
-        signal = _build_chatroom_sync_signal(db, channel, normalized if isinstance(normalized, dict) else {})
-        if not signal:
-            continue
-        chatroom_id = signal["chatroom_id"]
-        if chatroom_id in seen:
-            continue
-        seen.add(chatroom_id)
-        chatroom_ids.append(chatroom_id)
-        signals.append(signal)
-
-    return {"chatroom_ids": chatroom_ids, "signals": signals}
-
-
 def should_sync_wechat_ipad_chatroom_for_event(
     db: Session,
     channel: Channel,

@@ -29,15 +29,15 @@ from app.services.task_queue import enqueue_job
 from app.services.wechat_ipad import (
     pull_wechat_ipad_messages,
     run_wechat_ipad_action,
-    sync_wechat_ipad_chatrooms,
     sync_wechat_ipad_contacts,
 )
+from app.services.wechat_ipad.operations.group_directory import sync_group_directory
 from app.services.workwechat_cloud_poll import notify_cloud_job_enqueued, resolve_outbound_job_type
 from app.web.auth_common import require_tenant_csrf
 from app.web.channels.definitions import BUILTIN_CHANNEL_TYPES
 from app.web.shared.access import enforce_role, get_session
 from app.web.shared.forms import merge_channel_adapter_config
-from app.web.shared.operations import _completed_operation_response, _require_operation_csrf
+from app.web.shared.operations import _completed_operation_response, _csrf_from_header, _require_operation_csrf
 
 
 router = APIRouter()
@@ -320,31 +320,31 @@ async def pull_wechat_ipad_messages_action(request: Request, channel_id: int):
 
 
 @router.post("/channels/{channel_id}/wechat-ipad/sync-chatrooms")
-async def sync_wechat_ipad_chatrooms_action(request: Request, channel_id: int):
+def sync_wechat_ipad_chatrooms_action(request: Request, channel_id: int, csrf_token: str = Form("")):
     enforce_role(request, "ops")
     db = get_session()
     try:
-        await _require_operation_csrf(db, request)
+        require_tenant_csrf(db, request, _csrf_from_header(request) or csrf_token)
         channel = get_channel(db, channel_id)
         if not channel:
             raise HTTPException(status_code=404, detail="Channel not found")
         if channel.channel_type != "wechat_ipad":
             raise HTTPException(status_code=400, detail="Channel is not wechat_ipad")
-        overview = sync_wechat_ipad_chatrooms(db, channel)
-        message = str(overview.get("last_status_summary") or "已触发群资料同步")
+        overview = sync_group_directory(db, channel)
+        message = str(overview["last_status_summary"])
         record_audit(db, "channel.wechat-ipad.sync-chatrooms", "channel", channel.id, message)
         runtime = overview.get("runtime_info", {})
-        return _completed_operation_response(request, message, f"/channels/{channel_id}", ok=not bool(runtime.get("last_error") or runtime.get("last_chatroom_sync_failed_targets")))
+        return _completed_operation_response(request, message, f"/channels/{channel_id}/wechat-ipad?tab=groups", ok=not bool(runtime.get("last_error")))
     finally:
         db.close()
 
 
 @router.post("/channels/{channel_id}/wechat-ipad/sync-contacts")
-async def sync_wechat_ipad_contacts_action(request: Request, channel_id: int):
+def sync_wechat_ipad_contacts_action(request: Request, channel_id: int, csrf_token: str = Form("")):
     enforce_role(request, "ops")
     db = get_session()
     try:
-        await _require_operation_csrf(db, request)
+        require_tenant_csrf(db, request, _csrf_from_header(request) or csrf_token)
         channel = get_channel(db, channel_id)
         if not channel:
             raise HTTPException(status_code=404, detail="Channel not found")
@@ -353,7 +353,7 @@ async def sync_wechat_ipad_contacts_action(request: Request, channel_id: int):
         overview = sync_wechat_ipad_contacts(db, channel)
         message = str(overview.get("last_contact_sync_summary") or overview.get("last_status_summary") or "已执行联系人同步")
         record_audit(db, "channel.wechat-ipad.sync-contacts", "channel", channel.id, message)
-        return _completed_operation_response(request, message, f"/channels/{channel_id}", ok=not bool(overview.get("runtime_info", {}).get("last_error")))
+        return _completed_operation_response(request, message, f"/channels/{channel_id}/wechat-ipad?tab=contacts", ok=not bool(overview.get("runtime_info", {}).get("last_error")))
     finally:
         db.close()
 

@@ -36,7 +36,7 @@ def test_feature_order_is_independent_of_early_member_parser_import():
         "from app.services.group_features import member_change; "
         "from app.services.group_features.registry import all_features; "
         "assert [f.key for f in all_features()] == "
-        "['ai_chat', 'inactive_rank', 'media_download', 'member_change', 'red_packet', 'transfer_receive', 'trigger_reply']"
+        "['moderation', 'ai_chat', 'inactive_rank', 'media_download', 'member_change', 'red_packet', 'transfer_receive', 'trigger_reply']"
     )], check=True, capture_output=True, text=True)
 
 

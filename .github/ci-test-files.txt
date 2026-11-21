@@ -3,6 +3,13 @@ tests/test_account_connection_contracts.py
 tests/test_account_connection_service.py
 tests/test_ai_chat.py
 tests/test_ai_dispatch.py
+tests/test_ai_media.py
+tests/test_ai_providers.py
+tests/test_ai_provider_pages.py
+tests/test_ai_drawing.py
+tests/test_ai_drawing_jobs.py
+tests/test_ai_vision.py
+tests/test_ai_vision_settings.py
 tests/test_ai_memory_digest.py
 tests/test_ai_memory.py
 tests/test_ai_search.py
@@ -26,6 +33,7 @@ tests/test_execution_details_limit.py
 tests/test_group_ai_chat.py
 tests/test_group_feature_render_golden.py
 tests/test_group_features.py
+tests/test_group_moderation.py
 tests/test_group_gate_webridge.py
 tests/test_group_red_packet.py
 tests/test_group_run_mode.py
@@ -41,8 +49,13 @@ tests/test_log_view.py
 tests/test_message_cards.py
 tests/test_message_center.py
 tests/test_message_history_order.py
+tests/test_media_library.py
+tests/test_media_storage.py
+tests/test_video_preview.py
+tests/test_media_library_browser.py
 tests/test_contact_chat.py
 tests/test_music_plugin.py
+tests/test_moviepilot_plugin.py
 tests/test_test_runtime_isolation.py
 tests/test_webridge_ws_shutdown.py
 tests/test_web_screenshots.py
@@ -72,6 +85,7 @@ tests/test_platform_protocol_services.py
 tests/test_platform_proxy_pool.py
 tests/test_platform_system_info.py
 tests/test_plugin_common_services.py
+tests/test_plugin_article_summary.py
 tests/test_plugin_detail_page.py
 tests/test_plugin_binding_actions.py
 tests/test_plugin_binding_proxy.py
@@ -124,6 +138,7 @@ tests/test_webridge_group_sync.py
 tests/test_webridge_lag.py
 tests/test_webridge_media_default_off.py
 tests/test_webridge_media_upload.py
+tests/test_voice_media.py
 tests/test_webridge_member_events.py
 tests/test_webridge_member_directory.py
 tests/test_webridge_message_directory.py
@@ -135,6 +150,7 @@ tests/test_wechat_ipad_qrcode_runtime.py
 tests/test_workwechat_cloud_poll.py
 tests/test_plugin_governance.py
 tests/test_plugin_packages.py
+tests/test_plugin_uninstall.py
 tests/test_plugin_template.py
 tests/test_trigger_rules.py
 tests/test_webridge_legacy_upgrade.py

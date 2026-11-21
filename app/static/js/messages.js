@@ -10,6 +10,17 @@
   var hasMore = center.dataset.hasMore === "1";
   var loading = false, stickToBottom = true, refreshPromise = null, pollTimer = null, stopped = false;
 
+  // 外链封面失效时收起图片，保留可读标题和链接；捕获阶段也覆盖增量插入的历史消息。
+  function hideFailedCover(image) {
+    if (image && image.matches && image.matches("img[data-card-cover]")) image.hidden = true;
+  }
+  if (body) {
+    body.addEventListener("error", function (event) { hideFailedCover(event.target); }, true);
+    body.querySelectorAll("img[data-card-cover]").forEach(function (image) {
+      if (image.complete && !image.naturalWidth) hideFailedCover(image);
+    });
+  }
+
   function fit() {
     var workspace = center.closest(".workspace");
     var padding = workspace ? parseFloat(getComputedStyle(workspace).paddingBottom) || 0 : 24;
@@ -273,6 +284,15 @@
     return ["file"];
   }
   function attachmentFormatSupported() {
+    if (form.dataset.channelType === "wechat_ipad" && mediaType === "emoji"
+        && (file.size > 8 * 1024 * 1024 || !/\.(gif|png|webp)$/i.test(file.name))) {
+      setTip("请选择 8 MB 以内的 GIF、PNG 或 WebP 表情，或切换为文件发送", true);
+      return false;
+    }
+    if (form.dataset.channelType === "wechat_ipad" && mediaType === "video" && !/\.mp4$/i.test(file.name)) {
+      setTip("请选择 MP4 视频，或切换为文件发送", true);
+      return false;
+    }
     if (fileKinds(file).indexOf(mediaType) === -1) {
       setTip("该附件格式不支持当前发送类型，请切换为文件发送", true);
       return false;
@@ -491,6 +511,7 @@
       if (sending || !await supports(kind)) return;
       pickedType = kind;
       fileInput.accept = { image: "image/*", voice: "audio/*,.silk,.slik,.amr", video: "video/*", emoji: "image/gif,image/png,image/webp", file: "" }[kind];
+      if (kind === "video" && form.dataset.channelType === "wechat_ipad") fileInput.accept = ".mp4,video/mp4";
       fileInput.value = "";
       fileInput.click();
     });
@@ -531,7 +552,7 @@
     var revokeButton = menu.querySelector('[data-message-action="revoke"]');
     mentionButton.hidden = !avatar || center.dataset.chatType !== "group" || row.dataset.own === "1" || !row.dataset.senderId;
     quoteButton.hidden = avatar;
-    revokeButton.hidden = avatar || row.dataset.own !== "1";
+    revokeButton.hidden = avatar || row.dataset.own !== "1" || row.dataset.revokeState === "unknown" || row.dataset.revokeState === "dispatching";
     if (!mentionButton.hidden) mentionButton.textContent = "@ " + row.dataset.senderName;
     if (quoteButton.hidden && mentionButton.hidden && revokeButton.hidden) return false;
     menuRow = row;
@@ -591,6 +612,38 @@
       finally { action.disabled = false; }
     }
   });
+  async function addVideoPreview(payload, clip) {
+    var video = document.createElement("video"), url = URL.createObjectURL(clip), timer;
+    video.preload = "auto";
+    video.muted = true;
+    video.playsInline = true;
+    try {
+      await new Promise(function (resolve, reject) {
+        function fail() { reject(new Error("无法读取 MP4 视频，请选择浏览器可播放的视频或按文件发送")); }
+        timer = setTimeout(fail, 12000);
+        video.onerror = fail;
+        video.onloadeddata = resolve;
+        video.src = url;
+      });
+      if (!video.videoWidth || !video.videoHeight || !Number.isFinite(video.duration) || video.duration <= 0 || video.duration > 86400) {
+        throw new Error("视频画面或时长无效");
+      }
+      var canvas = document.createElement("canvas"), scale = Math.min(1, 480 / Math.max(video.videoWidth, video.videoHeight));
+      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      var cover = await new Promise(function (resolve) { canvas.toBlob(resolve, "image/jpeg", 0.82); });
+      if (!cover) throw new Error("未能生成视频封面");
+      payload.set("video_cover", cover, "cover.jpg");
+      payload.set("play_length", String(Math.ceil(video.duration)));
+    } finally {
+      clearTimeout(timer);
+      video.onerror = video.onloadeddata = null;
+      video.removeAttribute("src");
+      video.load();
+      URL.revokeObjectURL(url);
+    }
+  }
   async function send() {
     if (sending || (!file && !textarea.value.trim() && !mentions.length)) return;
     syncMentionTokens();
@@ -612,7 +665,9 @@
     payload.set("mention_ids", JSON.stringify(sendingFile ? [] : Array.from(new Set(mentions.map(function (person) { return person.id; })))));
     setTip("发送中…", false);
     try {
+      if (mediaType === "video" && sendingFile && form.dataset.channelType === "wechat_ipad") await addVideoPreview(payload, file);
       var result = await request("/messages/send", { method: "POST", body: payload });
+      if (result.unconfirmed && sendingFile) clearFile();
       if (result.ok) {
         if (!sendingFile) textarea.value = "";
         clearFile();

@@ -52,6 +52,7 @@ from app.web import (
     provider_nodes_router,
     public_site_router,
     tenant_admin_router,
+    ai_providers_router,
     tenant_auth_router,
 )
 from app.web.auth_common import (
@@ -72,11 +73,13 @@ from app.web.channels.ipad_login import router as channels_ipad_login_router
 from app.web.channels.webridge import router as channels_webridge_router
 from app.web.channels.workwechat_contacts import router as channels_workwechat_contacts_router
 from app.web.chatrooms.directory import router as chatrooms_directory_router
+from app.web.chatrooms.friend_requests import router as friend_requests_router
 from app.web.chatrooms.management import router as chatrooms_management_router
 from app.web.chatrooms.plugin_settings import router as chatrooms_plugin_settings_router
 from app.web.contact_check import router as contact_check_router
 from app.web.dashboard import router as dashboard_router
 from app.web.messages.moments import router as messages_moments_router
+from app.web.messages.media import router as media_router
 from app.web.messages.routes import router as messages_routes_router
 from app.web.plugins.routes import router as plugins_routes_router
 from app.web.plugins.maibot_connections import router as maibot_connections_router
@@ -122,6 +125,7 @@ app.include_router(platform_billing_router)
 app.include_router(platform_operations_router)
 app.include_router(platform_plugins_router)
 app.include_router(tenant_admin_router)
+app.include_router(ai_providers_router)
 app.include_router(open_api_apps_router)
 app.include_router(provider_nodes_router)
 logger.info("application module initialized", extra={"app_env": settings.app_env, "log_dir": settings.log_dir})
@@ -347,12 +351,14 @@ app.include_router(channels_actions_router)
 app.include_router(channels_webridge_router)
 app.include_router(channels_workwechat_contacts_router)
 app.include_router(chatrooms_directory_router)
+app.include_router(friend_requests_router)
 app.include_router(chatrooms_management_router)
 app.include_router(chatrooms_plugin_settings_router)
 app.include_router(plugins_routes_router)
 app.include_router(maibot_connections_router)
 app.include_router(messages_routes_router)
 app.include_router(messages_moments_router)
+app.include_router(media_router)
 app.include_router(dashboard_router)
 app.include_router(bots_router)
 app.include_router(points_router)

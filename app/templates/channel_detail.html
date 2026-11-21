@@ -8,6 +8,10 @@
 
 {% block hero_actions %}
 <div class="hero-action-cluster">
+  {% if channel.channel_type == 'wechat_ipad' %}
+  <a class="btn" href="/channels/{{ channel.id }}/wechat-ipad"><span class="i i-external" aria-hidden="true"></span><span>iPad 后台</span></a>
+  <a class="btn btn-secondary" href="/chatrooms?channel_id={{ channel.id }}"><span class="i i-users" aria-hidden="true"></span><span>群管理</span></a>
+  {% endif %}
   {% if channel.channel_type == 'wechat_ipad' and can_manage_channel %}
   <a class="btn" href="/channels/{{ channel.id }}/wechat-ipad/login-session"><span class="i i-refresh" aria-hidden="true"></span><span>重新登录</span></a>
   {% endif %}
@@ -61,22 +65,12 @@
 
       <h2>微信账号</h2>
     </div>
-    {% if can_manage_channel %}<a class="btn btn-secondary" href="/channels/{{ channel.id }}/wechat-ipad/login-session"><span class="i i-refresh" aria-hidden="true"></span><span>重新登录</span></a>{% endif %}
   </div>
   <div class="stats-grid compact-grid">
-    <div class="metric-item"><span>登录状态</span><strong>{{ '已登录' if wechat_ipad_overview.login_state == 'online' or wechat_ipad_overview.qrcode_status == 'success' else '未登录' }}</strong></div>
+    <div class="metric-item"><span>登录状态</span><strong>{{ wechat_ipad_overview.login_state_display }}</strong></div>
     <div class="metric-item"><span>账号昵称</span><strong>{{ wechat_ipad_overview.nickname or channel.name }}</strong></div>
     <div class="metric-item"><span>微信号</span><strong>{{ wechat_ipad_overview.alias or '-' }}</strong></div>
     <div class="metric-item"><span>绑定手机</span><strong>{{ wechat_ipad_overview.bind_mobile or '-' }}</strong></div>
-  </div>
-  <div class="form-actions-inline top-gap">
-    <form method="post" action="/channels/{{ channel.id }}/wechat-ipad/sync-contacts" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-      <button class="btn btn-secondary" type="submit"><span class="i i-refresh" aria-hidden="true"></span><span>同步联系人</span></button>
-    </form>
-    <form method="post" action="/channels/{{ channel.id }}/wechat-ipad/sync-chatrooms" data-action-feedback><input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-      <button class="btn btn-secondary" type="submit"><span class="i i-refresh" aria-hidden="true"></span><span>同步群聊</span></button>
-    </form>
-    <a class="btn btn-ghost" href="/chatrooms?channel_id={{ channel.id }}"><span class="i i-users" aria-hidden="true"></span><span>群管理</span></a>
   </div>
 </section>
 {% endif %}
@@ -130,31 +124,6 @@
 </section>
 {% endif %}
 
-{% if wechat_ipad_group_summary %}
-<section class="work-surface">
-  <div class="toolbar">
-    <div><h2>群聊</h2></div>
-    <a class="btn btn-secondary" href="/chatrooms?channel_id={{ channel.id }}"><span class="i i-chevron-right" aria-hidden="true"></span><span>查看全部</span></a>
-  </div>
-  <div class="stats-grid compact-grid">
-    <div class="metric-item"><span>群总数</span><strong>{{ wechat_ipad_group_summary.chatroom_count }}</strong></div>
-    <div class="metric-item"><span>资料完整</span><strong>{{ wechat_ipad_group_summary.active_chatroom_count }}</strong></div>
-    <div class="metric-item"><span>已有成员</span><strong>{{ wechat_ipad_group_summary.member_synced_chatroom_count }}</strong></div>
-  </div>
-  {% if wechat_ipad_group_summary.recent_chatrooms %}
-  <div class="business-list top-gap">
-    {% for item in wechat_ipad_group_summary.recent_chatrooms %}
-    <a class="business-list-row" href="/channels/{{ channel.id }}/chatrooms/{{ item.id }}">
-      <span><strong>{{ item.name }}</strong><small>{{ item.member_count }} 位成员</small></span>
-      <span aria-hidden="true">&#8250;</span>
-    </a>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p class="muted-text top-gap">暂无群聊数据。</p>
-  {% endif %}
-</section>
-{% endif %}
 
 {% if channel_chatroom_summary %}
 <section class="work-surface">
@@ -186,25 +155,6 @@
 </section>
 {% endif %}
 
-{% if wechat_ipad_contact_list %}
-<section class="work-surface">
-  <div class="toolbar">
-    <div><h2>联系人</h2></div>
-    <span class="chip chip-outline">{{ wechat_ipad_contact_list.total_count }} 人</span>
-  </div>
-  {% if wechat_ipad_contact_list.contacts %}
-  <div class="business-list">
-    {% for item in wechat_ipad_contact_list.contacts %}
-    <div class="business-list-row">
-      <span><strong>{{ item.display_name or item.nickname or '未命名联系人' }}</strong><small>{{ item.remark or item.region or '微信联系人' }}</small></span>
-    </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p class="muted-text">暂无联系人数据。</p>
-  {% endif %}
-</section>
-{% endif %}
 
 {# 消息记录只在消息中心里有一份:这里给出总数和入口,不再重复一张分页表。 #}
 <section class="work-surface" id="channel-message-section">

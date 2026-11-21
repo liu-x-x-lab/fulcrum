@@ -1,4 +1,4 @@
-"""平台后台的插件管理:卡片式浏览全部插件、全平台启停(点击即保存)、弹窗设置可见范围、上传安装/升级/回滚插件包。
+"""平台插件管理：浏览已安装插件、启停与可见范围、安装/升级/回滚和保留数据的卸载。
 
 插件目录全平台共享,租户只能管理自己机器人上的绑定;这里是平台方的管控入口。
 所有修改都要求平台会话和 CSRF 令牌,并写入平台审计日志。
@@ -16,6 +16,7 @@ from app.models.entities import Plugin
 from app.models.saas import SaasPlan, Tenant
 from app.services import plugin_packages
 from app.services.plugin_directory import sync_plugins_from_directory
+from app.services.plugin_uninstall import uninstall_plugin
 from app.services.plugin_governance import (
     VISIBILITY_LABELS,
     PluginGovernanceError,
@@ -75,12 +76,13 @@ def _get_plugin(db, code: str) -> Plugin:
 
 @router.get("/plugins", response_class=HTMLResponse)
 async def platform_plugins_page(request: Request):
-    """列出全部插件及其状态、可见范围和使用情况。"""
+    """手动刷新真实目录，列出已安装插件及其可见范围和使用情况。"""
 
     _require_platform_principal(request)
     with SessionLocal() as db:
-        sync_plugins_from_directory(db)
-        plugins = db.scalars(select(Plugin).order_by(Plugin.display_name.asc(), Plugin.code.asc())).all()
+        # 页面进入或手动刷新时扫描真实目录；保留缺失记录用于恢复数据，但列表只显示已安装项。
+        sync_plugins_from_directory(db, force=True)
+        plugins = db.scalars(select(Plugin).where(Plugin.missing_at.is_(None)).order_by(Plugin.display_name.asc(), Plugin.code.asc())).all()
         usage = usage_summary(db)
         plans = db.scalars(select(SaasPlan).order_by(SaasPlan.id.asc())).all()
         tenants = db.scalars(select(Tenant).order_by(Tenant.id.asc())).all()
@@ -119,7 +121,7 @@ async def platform_plugin_usage_data(request: Request, period: str = '24h'):
 
     _require_platform_principal(request)
     with SessionLocal() as db:
-        codes = db.scalars(select(Plugin.code)).all()
+        codes = db.scalars(select(Plugin.code).where(Plugin.missing_at.is_(None))).all()
         try:
             return JSONResponse(build_plugin_usage(db, codes, period=period), headers={'Cache-Control': 'no-store'})
         except ValueError as exc:
@@ -142,6 +144,12 @@ async def platform_plugin_status_action(code: str, request: Request):
         require_platform_csrf(db, request, request.headers.get("X-CSRF-Token", ""))
         plugin = _get_plugin(db, code)
         status = STATUS_ACTIVE if value else STATUS_DISABLED
+        if value:
+            # 不信任页面打开时的旧状态；目录可能已从服务器手动移除。
+            from app.services.plugin_directory import get_discovered_plugin
+
+            if plugin.missing_at is not None or get_discovered_plugin(code, force=True) is None:
+                return _json_error("插件目录不存在，请重新安装后再启用", status_code=409)
         if plugin.platform_status != status:
             set_platform_status(db, plugin, status=status, actor_user_id=principal.user_id)
             db.commit()
@@ -222,8 +230,13 @@ async def platform_plugin_upload_action(
             plugin,
             f"code={result.code};from={result.from_version or '-'};to={result.to_version}",
         )
+        requires_enable = plugin.platform_status == STATUS_DISABLED
         db.commit()
     if result.action == "install":
+        if result.code in existing_codes:
+            # 恢复旧插件沿用原可见范围，不能误报成“默认仅平台可见”。
+            return _redirect("/platform/plugins", f"{result.display_name} 已重新安装，原有配置已保留" +
+                             ("，请手动启用" if requires_enable else ""))
         return _redirect("/platform/plugins", f"{result.display_name} 已安装(默认仅平台可见,确认后再开放给租户)")
     return _redirect("/platform/plugins", f"{result.display_name} 已升级:{result.from_version} → {result.to_version}")
 
@@ -249,3 +262,19 @@ async def platform_plugin_rollback_action(
         record_plugin_audit(db, principal.user_id, "plugin.rollback", plugin, f"code={code};from={result.from_version or '-'};to={result.to_version}")
         db.commit()
     return _redirect("/platform/plugins", f"{result.display_name} 已回滚:{result.from_version} → {result.to_version}")
+
+
+@router.post("/plugins/{code}/uninstall")
+async def platform_plugin_uninstall_action(code: str, request: Request, csrf_token: str = Form("")):
+    """仅平台身份可卸载；租户数据保留，文件和数据库均成功后才提示完成。"""
+
+    principal = _require_platform_principal(request)
+    with SessionLocal() as db:
+        require_platform_csrf(db, request, csrf_token)
+        plugin = _get_plugin(db, code)
+        label = plugin.display_name
+        try:
+            uninstall_plugin(db, plugin, actor_user_id=principal.user_id)
+        except plugin_packages.PluginPackageError as exc:
+            return _redirect("/platform/plugins", f"卸载失败:{exc}", danger=True)
+    return _redirect("/platform/plugins", f"{label} 已卸载，配置、历史数据和恢复副本已保留")

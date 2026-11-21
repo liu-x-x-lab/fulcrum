@@ -1,0 +1,12 @@
+{# 仅使用供应商的公开模型目录；浏览器和能力表单从不接触凭据。 #}
+{% macro model_picker(catalog, provider_name, model_name, provider_id, selected_model, label, inherit_models=[]) %}
+<div class="full-row form-grid" data-ai-model-picker>
+  <label><span>{{ label }}供应商</span>
+    <select name="{{ provider_name }}" data-ai-provider>
+      <option value="" data-models="{{ inherit_models|tojson|forceescape }}">{{ '沿用租户默认' if provider_name == 'cfg_provider_id' else '请选择供应商' }}</option>
+      {% for provider in catalog %}<option value="{{ provider.id }}" data-models="{{ provider.models|tojson|forceescape }}"{% if provider_id|string == provider.id|string %} selected{% endif %}>{{ provider.name }}{{ '（已停用）' if not provider.enabled else '' }}</option>{% endfor %}
+    </select>
+  </label>
+  <label><span>{{ label }}模型</span><span class="config-suggestions" data-config-suggestions><input type="text" name="{{ model_name }}" value="{{ selected_model or '' }}" maxlength="100" list="ai-models-{{ model_name }}" data-ai-model autocomplete="off" placeholder="搜索或输入模型 ID" /><datalist id="ai-models-{{ model_name }}" data-ai-model-list></datalist></span></label>
+</div>
+{% endmacro %}

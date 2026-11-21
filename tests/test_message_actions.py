@@ -43,6 +43,75 @@ def _post(client, cid, csrf, **fields):
     return client.post("/messages/send", data={"conversation_id": cid, "csrf_token": csrf, **fields})
 
 
+def test_ipad_quote_uses_stored_server_id_and_checks_wechat_receipt(seeded, monkeypatch):
+    from app.services.channel_adapters.wechat_ipad import WechatIpadAdapter
+
+    client, ids, cid, mids, csrf = seeded
+    with ids["factory"]() as db:
+        channel = db.get(Channel, ids["channel_id"])
+        channel.channel_type = "wechat_ipad"
+        channel.adapter_config_json = '{"wxid":"bot"}'
+        channel.api_base = "https://provider.invalid"
+        db.get(Conversation, cid).channel_type = "wechat_ipad"
+        msg = db.get(Message, mids[0])
+        msg.raw_request_json = '{"native_ids":{"server":9876}}'
+        msg.direction, msg.sender_id = "in", "alice"
+        db.commit()
+    calls = []
+    ack = {"BaseResponse": {"ret": 0}, "newMsgId": 9877}
+
+    def send(self, url, body):
+        calls.append((url, body))
+        return {"Success": True, "Data": ack}
+
+    monkeypatch.setattr(WechatIpadAdapter, "_post_json", send)
+    assert _post(client, cid, csrf, content="收到", reply_to_id=mids[1]).status_code == 400
+    assert _post(client, cid, csrf, content="收到", reply_to_id=mids[0], mention_ids='["alice"]').status_code == 400
+    assert not calls
+    response = _post(client, cid, csrf, content="收到", reply_to_id=mids[0]).json()
+    assert response["ok"]
+    url, body = calls.pop()
+    assert url.endswith("/api/Msg/Quote") and body["ReferSvrID"] == "9876"
+    assert body["ReferChatUser"] == "alice" and body["ToWxid"] == body["ReferFromUser"] == "room@chatroom"
+    assert body["Title"] == "收到" and body["ReferContent"] == "第1条消息"
+    ack["BaseResponse"]["ret"] = -1
+    assert not _post(client, cid, csrf, content="收到", reply_to_id=mids[0]).json()["ok"]
+    ack.clear()
+    assert "不明" in _post(client, cid, csrf, content="收到", reply_to_id=mids[0]).json()["notice"]
+
+
+def test_ipad_manual_revoke_runs_through_the_tenant_worker(seeded, monkeypatch):
+    from app.services import async_workers
+    from app.services.channel_adapters.wechat_ipad import WechatIpadAdapter
+    from app.services.wechat_ipad.client import WechatIpadApiClient
+
+    client, ids, cid, _, csrf = seeded
+    with ids["factory"]() as db:
+        channel = db.get(Channel, ids["channel_id"])
+        channel.adapter_config_json = '{"wxid":"bot"}'
+        db.commit()
+    now = int(now_shanghai().timestamp())
+    receipt = {"Ret": 0, "ToUsetName": {"string": "room@chatroom"}, "Createtime": now, "ClientMsgid": 9, "NewMsgId": 89}
+    monkeypatch.setattr(WechatIpadAdapter, "_post_json", lambda *args:
+        {"Code": 0, "Success": True, "Data": {"BaseResponse": {"ret": 0}, "List": [receipt]}})
+    mid = _post(client, cid, csrf, content="测试撤回").json()["message_id"]
+    form = {"conversation_id": cid, "message_id": mid, "csrf_token": csrf}
+    assert client.post("/messages/revoke", data=form).json()["ok"]
+    assert client.post("/messages/revoke", data=form).json()["ok"]
+    with ids["factory"]() as db:
+        assert db.get(Message, mid).status == "sent"
+    monkeypatch.setattr(async_workers, "SessionLocal", ids["factory"])
+    monkeypatch.setattr(async_workers, "TenantSessionLocal", ids["factory"])
+    with patch.object(WechatIpadApiClient, "revoke_message", return_value={
+        "Code": 0, "Success": True, "Data": {"BaseResponse": {"ret": 0}}
+    }) as provider:
+        assert async_workers._run_single_job()
+        provider.assert_called_once()
+    with ids["factory"]() as db:
+        assert db.get(Message, mid).status == "revoked"
+        assert db.scalars(select(TaskJob).where(TaskJob.job_type == "ipad_message_revoke")).one().status == "completed"
+
+
 def test_quote_and_mentions_use_channel_ids_and_persist_local_quote(bridge):
     client, ids, cid, mids, csrf = bridge
     result = _post(client, cid, csrf, content="你好", reply_to_id=mids[0], mention_ids=json.dumps(["wxid_a"]))

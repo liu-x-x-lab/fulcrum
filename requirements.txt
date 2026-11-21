@@ -16,6 +16,8 @@ pydantic>=2.9.2
 pydantic-settings>=2.5.2
 python-multipart>=0.0.9
 pydub>=0.25.1
+# 内置 SILK 编解码；导入名为 pysilk，不能与旧的同名 PyPI 包混装。
+silk-python==0.2.9
 markdown>=3.10
 psutil>=7.2.2
 pillow>=10.0.0

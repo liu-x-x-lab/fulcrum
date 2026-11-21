@@ -28,7 +28,7 @@ MEDIA_LABELS = {"image": "图片", "video": "视频", "voice": "语音", "emoji"
 REFER_LABELS = {3: "[图片]", 34: "[语音]", 42: "[名片]", 43: "[视频]", 47: "[表情]", 48: "[位置]", 10000: "[系统消息]"}
 # appmsg 类型 -> 卡片种类
 APPMSG_KINDS = {5: "link", 4: "link", 3: "link", 6: "file", 19: "merged", 33: "mini_program", 36: "mini_program", 57: "quote", 2000: "notice", 2001: "notice"}
-KIND_TAGS = {"mini_program": "小程序", "merged": "聊天记录", "notice": "通知", "link": "链接"}
+KIND_TAGS = {"mini_program": "小程序", "merged": "聊天记录", "notice": "通知", "link": "链接", "article": "图文"}
 
 
 def _text(value: Any) -> str:
@@ -81,7 +81,12 @@ def safe_url(value: str) -> str:
     """只接受 http/https 地址(卡片里的链接来自消息内容,不能是 javascript: 之类)。"""
 
     url = html.unescape(str(value or "")).strip()
-    return url if urlsplit(url).scheme in {"http", "https"} and len(url) < 2000 else ""
+    try:
+        parsed = urlsplit(url)
+        return url if parsed.scheme in {"http", "https"} and parsed.hostname and len(url) < 2000 else ""
+    except ValueError:
+        # 链接和封面都来自消息；畸形主机地址不能导致整个消息列表渲染失败。
+        return ""
 
 
 def strip_sender(content: str) -> str:
@@ -194,11 +199,12 @@ def parse_quote_payload(content: object) -> dict[str, Any] | None:
         "ref_content": refer_text,
         "ref_name": _text(refer.findtext("displayname", "")),
     }
-    if payload["ref_type"] == 3:
+    if payload["ref_type"] in {3, 43}:
         # 微信上报的是外部消息编号，不是本地消息主键；原样保留精度。
         external_id = (refer.findtext("svrid") or "").strip()
         if external_id and external_id != "0":
             payload["ref_external_id"] = external_id
+    if payload["ref_type"] == 3:
         info = _image_info(refer_text)
         if info:
             payload["image_info"] = info
@@ -228,8 +234,28 @@ def _media_view(media_type: str, root: ElementTree.Element | None) -> dict[str, 
     return {"kind": "media", "media_type": media_type, "label": MEDIA_LABELS[media_type], "meta": meta, "title": ""}
 
 
+def _articles(appmsg: ElementTree.Element) -> dict[str, Any] | None:
+    """公众号推送按阅读器中的顺序展示所有文章，不用顶层摘要替代整组内容。"""
+
+    articles = []
+    for item in appmsg.findall("mmreader/category/item"):
+        title = _find(item, "title") or _find(item, "title_v2")
+        desc = _find(item, "summary") or _find(item, "digest")
+        url = safe_url(_find(item, "url"))
+        cover = safe_url(_find(item, "cover")) or safe_url(_find(item, "thumburl"))
+        # 空条目没有可展示信息；坏链接不影响同一条目中的标题、摘要和封面。
+        if not (title or desc or url or cover):
+            continue
+        articles.append({"title": title or "图文消息", "desc": desc, "url": url, "cover": cover})
+    if not articles:
+        return None
+    source = (_find(appmsg, "mmreader/publisher/nickname") or _find(appmsg, "sourcedisplayname")
+              or _find(appmsg, "mmreader/category/name"))
+    return {"kind": "article", "title": articles[0]["title"], "articles": articles, "source": source}
+
+
 def describe(content: object, message_type: object = "text") -> dict[str, Any]:
-    """解析一条消息,返回 {"kind": ..., ...}。kind: text / quote / link / mini_program / merged / notice / media / system / unknown。
+    """解析一条消息,返回 {"kind": ..., ...}。kind: text / quote / link / article / mini_program / merged / notice / media / system / unknown。
 
     解析失败或内容异常时退回纯文字/未知,保证页面永远能显示。
     """
@@ -262,6 +288,10 @@ def describe(content: object, message_type: object = "text") -> dict[str, Any]:
     kind = APPMSG_KINDS.get(app_type) or {"quote": "quote", "link": "link", "mini_program": "mini_program", "merged_records": "merged", "file": "file"}.get(kind_hint, "link")
     if kind == "quote":
         return _quote(root)
+    if app_type == 5:
+        articles = _articles(appmsg)
+        if articles is not None:
+            return articles
     title = _find(appmsg, "title")
     desc = _find(appmsg, "des")
     if kind == "file":
@@ -272,9 +302,9 @@ def describe(content: object, message_type: object = "text") -> dict[str, Any]:
     source = _find(appmsg, "sourcedisplayname") or _find(appmsg, "appinfo/appname") or (urlsplit(url).hostname or "")
     if kind == "link" and not url and not title:
         return {"kind": "unknown", "text": "[暂不支持显示的消息]", "raw": raw[:2000]}
-    if "红包" in desc or "wxhb" in url:
-        kind = "notice"
-    return {"kind": kind, "title": title or desc or "卡片消息", "desc": desc if title else "", "url": url, "source": source, "tag": KIND_TAGS.get(kind, "")}
+    # 红包、转账由明确的 appmsg 类型识别；文章正文或 URL 中的词语不能改变消息类别。
+    return {"kind": kind, "title": title or desc or "卡片消息", "desc": desc if title else "", "url": url, "source": source, "tag": KIND_TAGS.get(kind, ""),
+            "cover": safe_url(_find(appmsg, "thumburl")) if kind == "link" else ""}
 
 
 def attach_media(view: dict[str, Any], attachments: Iterable[Any]) -> dict[str, Any]:
@@ -309,7 +339,7 @@ def preview(content: object, message_type: object = "text", limit: int = 60) -> 
         text = f"[{view['label']}]" + (f" {view['title']}" if view.get("title") else "")
     elif kind == "quote":
         text = f"[引用] {view['title']}".strip()
-    elif kind in {"link", "mini_program", "merged", "notice"}:
+    elif kind in {"link", "article", "mini_program", "merged", "notice"}:
         text = f"[{KIND_TAGS.get(kind, '卡片')}] {view['title']}"
     else:
         text = view.get("text") or "[消息]"

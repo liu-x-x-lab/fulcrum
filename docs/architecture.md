@@ -13,11 +13,17 @@ application entry points should remain small enough to show composition clearly.
 | `app/web/shared/` | Tenant access/session helpers, template environment, URLs, forms, queries and operation feedback |
 | `app/web/channels/` | Account pages, connection workflow, iPad login, channel actions, WeBridge and WeCom contacts |
 | `app/web/chatrooms/` | Directory/detail pages, group management and group plugin settings |
+| `app/web/ai_providers.py`, `app/services/ai_providers.py` | Tenant AI connections, encrypted keys, model catalogs and capability selections; see [AI providers](ai-providers.md) |
+| `app/services/ai_drawing.py`, `app/services/ai_drawing_jobs.py` | Native Images API, exact quote preparation and persisted at-most-once drawing attempts; see [AI drawing](ai-drawing.md) |
+| `app/services/group_moderation/` | Native content moderation, violation records, removal authorization checks and result settlement; see [Group moderation](group-moderation.md) |
 | `app/web/plugins/` | Plugin administration routes and view builders |
 | `app/web/messages/` | Conversations, messages, attachments and moments |
+| `app/web/messages/media.py`, `app/services/media_library.py`, `app/services/media_files.py`, `app/services/silk_preview.py`, `app/services/video_preview.py` | Tenant media catalog, authorized local previews/downloads, bounded SILK/video-cover decoder children and administrator cleanup; see [Media library](media-library.md) |
+| `app/services/media_storage.py`, `app/services/media_dedup.py` | Tenant-local content sharing, atomic media publication/reference removal, and bounded administrator scan/confirmation plans; see [Media library](media-library.md#shared-storage-and-historical-duplicates) |
 | `app/web/dashboard.py`, `bots.py`, `points.py`, `setup.py` | Their corresponding browser domains |
 | `app/api/channel_webhooks.py` | Signature verification and trusted tenant restoration for generic channel inbound events |
 | `app/services/wechat_ipad/operations/` | Login, status, heartbeat, recovery, contacts, synchronization and scope mutations |
+| `app/services/account_dashboard.py` | Local, paged account directories shared by the WeBridge and iPad dashboards; iPad friend rows are keyed by tenant, channel, signed-in account and friend |
 | `app/services/wechat_ipad/service.py` | Generic protocol action orchestration |
 | `app/services/wechat_ipad/runtime.py`, `transport.py` | Runtime persistence and protocol call/result handling |
 | `app/services/wechat_ipad/group_details.py` | Group detail loading and inherited-scope preparation in the caller transaction |
@@ -79,6 +85,8 @@ and operator-specific endpoints stay outside source control.
 | Long-term AI memory | [ai_memory.py](../app/services/ai_memory.py), [ai_memory_digest.py](../app/services/ai_memory_digest.py) | `HINDSIGHT_URL`; empty disables memory. The address is platform configuration, not tenant input. |
 | Text generation | [plugin_runtime/text_generation.py](../app/services/plugin_runtime/text_generation.py) | Use the shared execution context and resolved binding configuration. |
 | AI search | [ai_search.py](../app/services/ai_search.py) | Reuse the existing AI search path rather than adding another search stack. |
+| AI vision | [ai_media.py](../app/services/ai_media.py), [ai_vision.py](../app/services/ai_vision.py) | Independently configured tenant model; exact scoped references, existing media workers and bounded visual-only video sampling. See [AI vision](ai-vision.md). |
+| AI drawing | [ai_drawing.py](../app/services/ai_drawing.py), [ai_drawing_jobs.py](../app/services/ai_drawing_jobs.py) | Provider/model selection, tenant and group opt-in, exact quoted edits, bounded output and no automatic paid retries. See [AI drawing](ai-drawing.md). |
 
 ### Kitesurf
 

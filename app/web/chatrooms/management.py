@@ -13,6 +13,7 @@ from app.services.crud import get_channel
 from app.services.ops import record_audit
 from app.services.task_queue import WORKWECHAT_CLOUD_CONTROL_JOB, enqueue_job
 from app.services.wechat_ipad import sync_wechat_ipad_chatrooms
+from app.services.wechat_ipad.operations import group_notice, group_rename
 from app.services.wechat_webridge import (
     invitation_sync as webridge_invitation_sync,
     wakeup as webridge_wakeup,
@@ -39,6 +40,21 @@ from app.web.shared.operations import (
 
 
 router = APIRouter()
+
+
+@router.post("/channels/{channel_id}/chatrooms/{chatroom_id}/rename")
+def rename_chatroom_action(request: Request, channel_id: int, chatroom_id: int, name: str = Form(...),
+                           expected_name: str = Form(...), csrf_token: str = Form("")):
+    user = enforce_role(request, "ops")
+    with get_session() as db:
+        require_tenant_csrf(db, request, csrf_token or _csrf_from_header(request))
+        channel, room = get_channel(db, channel_id), db.get(Chatroom, chatroom_id)
+        if (not channel or channel.channel_type != "wechat_ipad" or not room or room.channel_id != channel.id
+                or room.bot_id != channel.bot_id or room.tenant_id != channel.tenant_id or room.tenant_id != user.tenant_id):
+            raise HTTPException(status_code=404, detail="Chatroom not found")
+        ok, message = group_rename.rename(db, channel, room, expected_name=expected_name, name=name)
+        record_audit(db, "channel.wechat_ipad.chatroom.rename", "chatroom", room.id, message, actor=user.username)
+        return _completed_operation_response(request, message, f"/channels/{channel.id}/chatrooms/{room.id}?tab=profile", ok=ok)
 
 
 def _invitation_sync_target(db: Session, channel_id: int, chatroom_id: int) -> tuple[Channel, Chatroom]:
@@ -129,9 +145,17 @@ async def sync_wechat_ipad_chatroom_action(request: Request, channel_id: int, ch
         return_tab = tab if tab in ("features", "plugins", "members", "profile") else "features"
         return_url = f"/channels/{channel_id}/chatrooms/{chatroom_id}?tab={return_tab}"
         if channel.channel_type == "wechat_ipad":
+            target = group_notice.target(channel, chatroom)
+            if target is None:
+                return _completed_operation_response(request, "当前群或账号不可同步", return_url, ok=False)
             overview = sync_wechat_ipad_chatrooms(db, channel, chatroom_ids=[chatroom.external_id])
+            notice_error = group_notice.read_notice(db, channel, chatroom, target)
             message = str(overview.get("last_status_summary") or "已触发单群资料同步")
+            message += " " + (notice_error or "已同步群公告")
             record_audit(db, "channel.wechat-ipad.sync-chatroom", "chatroom", chatroom.id, message)
+            runtime = overview.get("runtime_info", {})
+            return _completed_operation_response(request, message, return_url, ok=not (
+                notice_error or runtime.get("last_error") or runtime.get("last_chatroom_sync_failed_targets")))
         elif channel.channel_type == "wechat_winauto":
             overview = sync_wechat_winauto_chatrooms(db, channel)
             db.commit()
@@ -195,8 +219,6 @@ async def sync_wechat_ipad_chatroom_action(request: Request, channel_id: int, ch
             return _queued_operation_response(request, db, channel, [member_job, notice_job], return_url)
         else:
             raise HTTPException(status_code=400, detail="Channel is not wechat_ipad / wechat_winauto / workwechat / wechat_webridge")
-        runtime = overview.get("runtime_info", {})
-        return _completed_operation_response(request, message, return_url, ok=not bool(runtime.get("last_error") or runtime.get("last_chatroom_sync_failed_targets")))
     finally:
         db.close()
 

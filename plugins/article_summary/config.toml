@@ -1,0 +1,38 @@
+[plugin]
+code = "article_summary"
+display_name = "文章链接摘要"
+plugin_type = "message"
+version = "1.1.2"
+author = "Fulcrum"
+description = "自动读取群内公开文章及公众号分享，将正文交给租户 AI 模型生成简短中文摘要。"
+default_enabled = false
+
+[capability]
+channel_types = ["wechat_ipad", "wechat_winauto", "wechat_webridge", "wechat_gugatool", "workwechat", "telegram", "openclaw", "simulator"]
+chat_types = ["group"]
+message_types = ["text", "app", "link", "file"]
+priority = 110
+consume_policy = "continue"
+timeout_ms = 85000
+
+[matcher]
+require_mention = false
+
+[runtime]
+summary_model = ""
+model_timeout_seconds = 30
+
+[[config.fields]]
+key = "summary_model"
+label = "摘要模型"
+kind = "text"
+default = ""
+hint = "留空使用租户默认模型。仅用于文章摘要，不改变接口、密钥或群聊模型。"
+
+[[config.fields]]
+key = "model_timeout_seconds"
+label = "摘要等待时间（秒）"
+kind = "number"
+default = 30
+min = 5
+max = 60

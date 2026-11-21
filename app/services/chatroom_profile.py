@@ -116,19 +116,7 @@ def save_webridge_group_notice(
         return '群公告目标不存在'
     if result.get('room_id') is not None and result['room_id'] != room_id:
         return '群公告回报与目标群不一致'
-    extra = parse_config_json(room.extra_json)
-    previous = extra.get(NOTICE_KEY)
-    previous = dict(previous) if isinstance(previous, dict) else {}
-    requested_at = ensure_shanghai_datetime(requested_at)
-    if previous.get('request_created_at'):
-        try:
-            previous_request = ensure_shanghai_datetime(datetime.fromisoformat(previous['request_created_at']))
-        except (TypeError, ValueError):
-            previous_request = None
-        if previous_request and requested_at < previous_request:
-            return None
-
-    snapshot = dict(previous)
+    snapshot = {}
     problem = str(error or '群公告读取失败')[:240] if not ok else ''
     if ok:
         # 按已确认的当前协议校验，不猜测字段别名；成功但缺少缓存状态仍应显示读取失败。
@@ -159,7 +147,28 @@ def save_webridge_group_notice(
                     state=('body' if body else ('summary' if summary else 'empty')) if found else 'not_cached',
                     has_images=parser.has_images, fetched_at=now_shanghai().isoformat(),
                 )
+    return store_notice_snapshot(room, requested_at, snapshot, problem)
+
+
+def store_notice_snapshot(room, requested_at, fields, problem, *, owner_wxid=None):
+    """调用方已锁定目标群；只更新该群公告，不覆盖其他群设置。"""
+    extra = parse_config_json(room.extra_json)
+    previous = extra.get(NOTICE_KEY)
+    previous = dict(previous) if isinstance(previous, dict) else {}
+    if owner_wxid is not None and previous.get('owner_wxid') != owner_wxid:
+        previous = {}
+    requested_at = ensure_shanghai_datetime(requested_at)
+    if previous.get('request_created_at'):
+        try:
+            previous_request = ensure_shanghai_datetime(datetime.fromisoformat(previous['request_created_at']))
+        except (TypeError, ValueError):
+            previous_request = None
+        if previous_request and requested_at < previous_request:
+            return '已忽略过期的公告回报' if owner_wxid is not None else None
+    snapshot = {**previous, **fields}
     attempt = {'request_created_at': requested_at.isoformat(), 'checked_at': now_shanghai().isoformat()}
+    if owner_wxid is not None:
+        attempt['owner_wxid'] = owner_wxid
     snapshot.update(**attempt, last_error=problem)
     serialized = json.dumps({**extra, NOTICE_KEY: snapshot}, ensure_ascii=False, sort_keys=True)
     if len(serialized.encode('utf-8')) > BYTE_LIMIT:
@@ -177,7 +186,13 @@ def build_chatroom_profile(channel: Channel, chatroom: Chatroom, members: list[d
     """为现有「资料」标签提供一致视图，能力未接入与已读取空缓存分别说明。"""
     saved = parse_config_json(chatroom.extra_json).get(NOTICE_KEY)
     saved = saved if isinstance(saved, dict) else {}
-    notice_supported = channel.channel_type == 'wechat_webridge'
+    ipad = channel.channel_type == 'wechat_ipad'
+    notice_supported = ipad or channel.channel_type == 'wechat_webridge'
+    if ipad:
+        from app.services.account_identity import account_identity
+
+        if not saved.get('owner_wxid') or saved['owner_wxid'] != account_identity(channel)['external_id']:
+            saved = {}
     owner = next((member for member in members if (
         member['member_external_id'] == chatroom.owner_external_id
         or not chatroom.owner_external_id and member.get('role') == 'owner'
@@ -199,7 +214,7 @@ def build_chatroom_profile(channel: Channel, chatroom: Chatroom, members: list[d
             'fetched_at': saved.get('fetched_at'),
             'checked_at': saved.get('checked_at'),
             'last_error': saved.get('last_error', '') if notice_supported else '',
-            'source_label': '手机缓存' if notice_supported else '',
+            'source_label': 'iPad 协议' if ipad else ('手机缓存' if notice_supported else ''),
         },
         # 当前群详情各渠道均未接入群内置顶消息读取；不借用朋友圈的置顶诊断字段。
         'pinned': {'supported': False},

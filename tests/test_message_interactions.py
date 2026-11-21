@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, select_autoescape
 
-from app.services.message_view import preview
+from app.services.message_view import describe, preview
 from app.services.conversation_kinds import KIND_LABELS
 
 playwright = pytest.importorskip("playwright.sync_api")
@@ -633,4 +633,50 @@ def test_menu_layout_keyboard_and_expired_revoke(page, viewport):
     playwright.expect(page.locator("#wechat-composer-hint")).to_contain_text("超过 2 分钟")
     assert screen.revoked == []
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+    assert not screen.page_errors
+
+
+@pytest.mark.parametrize("viewport", [{"width": 1440, "height": 900}, {"width": 1024, "height": 768}, {"width": 390, "height": 844}])
+def test_article_covers_layout_failure_and_keyboard_links(page, viewport):
+    # 所有封面和目标网页均在浏览器内拦截，不访问真实公众号或图片服务。
+    page.set_viewport_size(viewport)
+    def article_resource(route):
+        if route.request.url.endswith("missing.png"):
+            route.fulfill(status=404, body="")
+        elif route.request.url.endswith("cover.png"):
+            route.fulfill(content_type="image/svg+xml", body='<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#6366f1"/></svg>')
+        else:
+            route.fulfill(content_type="text/html", body="文章内容")
+    page.context.route("https://articles.test/**", article_resource)
+    screen = MessagePage(page, count=1)
+    xml = ('<msg><appmsg><type>5</type><mmreader><category>'
+           '<item><title>第一篇图文标题</title><summary>文章摘要</summary><url>https://articles.test/first</url><cover>https://articles.test/cover.png</cover></item>'
+           '<item><title>' + '第二篇长标题' * 8 + '</title><url>https://articles.test/second</url><cover>https://articles.test/missing.png</cover></item>'
+           '</category><publisher><nickname>示例公众号</nickname></publisher></mmreader></appmsg></msg>')
+    screen.messages[0].content = xml
+    screen.messages[0].message_type = "link"
+    screen.views[1] = describe(xml, "link")
+    page.reload()
+    cover = page.locator('.msg-article-cover').first
+    cover.scroll_into_view_if_needed()
+    playwright.expect(cover).to_be_visible()
+    page.wait_for_function("document.querySelector('.msg-article-cover').naturalWidth > 0")
+    broken = page.locator('.msg-article-cover').nth(1)
+    page.locator('.msg-article').nth(1).scroll_into_view_if_needed()
+    playwright.expect(broken).to_be_hidden()
+    assert page.locator('.msg-article').count() == 2
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+    assert page.locator('.msg-articles').evaluate("el => el.scrollWidth <= el.clientWidth + 1")
+    first = page.locator('.msg-article').first
+    first.focus()
+    playwright.expect(first).to_be_focused()
+    with page.expect_popup() as popup:
+        first.press("Enter")
+    popup.value.wait_for_url("https://articles.test/first")
+    popup.value.close()
+    # 增量插入的卡片也由同一个捕获监听器处理失效封面。
+    page.locator('#wechat-thread-body').evaluate("(el, html) => el.insertAdjacentHTML('beforeend', html)", screen.rows(screen.messages))
+    last = page.locator('.msg-article-cover').last
+    page.locator('.msg-article').last.scroll_into_view_if_needed()
+    playwright.expect(last).to_be_hidden()
     assert not screen.page_errors

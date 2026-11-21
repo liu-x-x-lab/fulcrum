@@ -1,4 +1,4 @@
-/* 长选项列表的搜索选择器：搜索文字只筛选，表单始终提交原生 select 中已选择的值。 */
+/* 复用有界搜索面板：select 只提交已选值，带 datalist 的文本框允许直接提交手填值。 */
 (() => {
   "use strict";
   const LIMIT = 12;
@@ -8,27 +8,34 @@
   class ConfigSuggestions {
     constructor(root) {
       this.root = root;
-      this.value = root.querySelector("select");
-      this.options = Array.from(this.value.options, option => ({
-        value: option.value, label: option.textContent.trim(),
-      }));
-      this.input = document.createElement("input");
-      this.input.type = "text";
-      this.input.placeholder = root.dataset.placeholder || "输入关键词筛选后选择";
+      this.value = root.querySelector("select, input");
+      this.editable = this.value.tagName === "INPUT";
+      this.catalog = this.editable ? root.querySelector("datalist") : this.value;
+      this.readOptions();
+      this.input = this.editable ? this.value : document.createElement("input");
+      if (this.editable) {
+        // 模型 ID 保持为唯一提交字段，只替换浏览器无界候选面板，不复制或隐藏真实输入。
+        this.input.removeAttribute("list");
+      } else {
+        this.input.type = "text";
+        this.input.placeholder = root.dataset.placeholder || "输入关键词筛选后选择";
+        root.prepend(this.input);
+        this.value.hidden = true;
+      }
       this.input.autocomplete = "off";
       this.input.disabled = this.value.disabled;
-      root.prepend(this.input);
-      this.value.hidden = true;
       this.panel = document.createElement("ul");
       this.panel.id = `config-suggestions-${++sequence}`;
       this.panel.className = "ui-select-panel config-suggestions-panel";
       this.panel.setAttribute("role", "listbox");
       this.panel.hidden = true;
       root.append(this.panel);
-      this.summary = document.createElement("small");
-      this.summary.className = "field-hint config-suggestions-summary";
-      this.summary.setAttribute("aria-live", "polite");
-      root.after(this.summary);
+      if (!this.editable) {
+        this.summary = document.createElement("small");
+        this.summary.className = "field-hint config-suggestions-summary";
+        this.summary.setAttribute("aria-live", "polite");
+        root.after(this.summary);
+      }
       this.input.setAttribute("role", "combobox");
       this.input.setAttribute("aria-autocomplete", "list");
       this.input.setAttribute("aria-expanded", "false");
@@ -36,6 +43,11 @@
       this.input.setAttribute("aria-label", root.closest("label")?.querySelector("span")?.textContent.trim() || "搜索配置选项");
       this.showValue();
       this.value.addEventListener("change", () => { this.close(); this.showValue(); });
+      root.addEventListener("config-suggestions:refresh", () => {
+        this.readOptions();
+        this.close();
+        this.showValue();
+      });
       this.input.addEventListener("focus", () => {
         this.input.select();
         this.open("");
@@ -44,8 +56,7 @@
         if (this.panel.hidden) this.open("");
       });
       this.input.addEventListener("input", () => {
-        const query = this.input.value.trim();
-        this.open(query);
+        if (document.activeElement === this.input) this.open(this.input.value.trim());
       });
       this.input.addEventListener("keydown", event => this.onKey(event));
       // 保持输入焦点，并阻止外层 label 将候选项点击转发给输入框。
@@ -62,20 +73,30 @@
       root.closest("dialog")?.addEventListener("close", () => this.close());
     }
 
+    readOptions() {
+      this.options = Array.from(this.catalog.options, option => ({
+        value: option.value, label: option.label || option.value,
+      }));
+    }
+
     showValue() {
+      if (this.editable) return;
       const selected = this.options.find(option => option.value === this.value.value);
       this.input.value = selected ? selected.label : this.value.value;
       this.summary.textContent = selected ? `ID：${selected.value}` : "请选择内置来源";
     }
 
     open(query) {
-      if (this.input.disabled) return;
+      if (this.input.matches(":disabled") || this.input.readOnly) return;
       if (opened && opened !== this) opened.close();
       opened = this;
       const words = query.toLowerCase().split(/\s+/).filter(Boolean);
       const matches = this.options.filter(option => words.every(word => `${option.label} ${option.value}`.toLowerCase().includes(word)));
+      // 初次展开将当前模型放在前面，避免它被长目录的前 12 项截掉。
+      const selected = matches.find(option => option.value === this.value.value);
+      const visible = this.editable && !query && selected ? [selected, ...matches.filter(option => option !== selected)] : matches;
       this.panel.replaceChildren();
-      for (const [index, option] of matches.slice(0, LIMIT).entries()) {
+      for (const [index, option] of visible.slice(0, LIMIT).entries()) {
         const item = document.createElement("li");
         item.id = `${this.panel.id}-${index}`;
         item.className = "ui-select-option";
@@ -85,19 +106,24 @@
         item.classList.toggle("is-selected", option.value === this.value.value);
         const name = document.createElement("span");
         name.textContent = option.label;
-        const id = document.createElement("small");
-        id.textContent = option.value;
-        item.append(name, id);
+        item.append(name);
+        if (!this.editable) {
+          const id = document.createElement("small");
+          id.textContent = option.value;
+          item.append(id);
+        }
         this.panel.append(item);
       }
       const hint = document.createElement("li");
       hint.className = "config-suggestions-count";
       hint.setAttribute("role", "presentation");
-      hint.textContent = matches.length ? `${query ? "匹配" : "内置"} ${matches.length} 项${matches.length > LIMIT ? `，显示前 ${LIMIT} 项，继续输入筛选` : ""}` : "没有匹配来源，请换个关键词搜索";
+      hint.textContent = matches.length ? `${query ? "匹配" : "共"} ${matches.length} 项${matches.length > LIMIT ? `，显示前 ${LIMIT} 项，继续输入筛选` : ""}` :
+        (this.editable ? "没有匹配项，可直接使用输入的模型 ID" : "没有匹配来源，请换个关键词搜索");
       this.panel.append(hint);
       this.panel.hidden = false;
       this.input.setAttribute("aria-expanded", "true");
-      this.setActive(this.panel.querySelector(".is-selected") || this.panel.querySelector("[data-value]"));
+      // 自由输入模式不把前缀自动替换成第一项，只有点击或方向键确认才选候选。
+      this.setActive(this.panel.querySelector(".is-selected") || (!this.editable && this.panel.querySelector("[data-value]")));
       this.positionPanel();
     }
 

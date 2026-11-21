@@ -4,7 +4,7 @@ import inspect
 from pathlib import Path
 from unittest.mock import patch
 
-from app.models.entities import Channel
+from app.models.entities import Channel, Conversation
 from app.services.channel_adapters.wechat_ipad import WechatIpadAdapter
 from app.services.channel_catalog import get_channel_type_definition
 from app.services.wechat_ipad.client import WechatIpadApiClient
@@ -20,6 +20,37 @@ def _build_channel() -> Channel:
         channel_type="wechat_ipad",
         api_base="http://127.0.0.1:9064",
     )
+
+
+def test_sync_mentions_and_server_id_are_independent_of_event_key():
+    channel = _build_channel()
+    channel.adapter_config_json = '{"wxid":"bot"}'
+    adapter = WechatIpadAdapter()
+    event = {"MsgId": 4, "NewMsgId": 901, "MsgType": 1, "FromUserName": {"string": "room@chatroom"},
+             "ToUserName": {"string": "bot"}, "Content": {"string": "alice:\n@bot hello"},
+             "MsgSource": "<msgsource><atuserlist><![CDATA[bot,other]]></atuserlist></msgsource>"}
+    normalized = adapter.normalize_inbound_payload(channel, event)
+    assert normalized["event_key"] == "4"
+    assert normalized["details"]["server_message_id"] == "901"
+    assert normalized["details"]["mentioned_self"] is True
+    for source in ("", "<invalid", "<msgsource><atuserlist>other</atuserlist></msgsource>"):
+        assert not adapter.normalize_inbound_payload(channel, {**event, "MsgSource": source})["details"]["mentioned_self"]
+    own = adapter.normalize_inbound_payload(channel, {**event, "Content": {"string": "bot:\nhello"}})
+    assert own["details"]["direction"] == "out" and not own["details"]["mentioned_self"]
+
+
+def test_plugin_quote_uses_local_trigger_without_changing_plain_replies():
+    from app.services.plugin_directory import DirectoryPluginContext, _build_auto_outbound_payloads
+
+    ctx = DirectoryPluginContext(plugin_code="example", binding_id=1, bot_id=1, channel_id=2,
+                                 channel_type="wechat_ipad", chat_type="group", message_type="text",
+                                 command_prefix="", content="ping", sender_id="alice", message_id=7,
+                                 conversation_external_id="room@chatroom", mentioned_self=False,
+                                 normalized_event={"message": {"external_message_id": "event-42"}})
+    plain = {"message_type": "text", "content": "pong"}
+    assert _build_auto_outbound_payloads(ctx, {"reply_text": "pong"}) == [plain]
+    assert _build_auto_outbound_payloads(ctx, {"reply_text": "pong", "reply_mode": "quote"}) == [
+        {**plain, "reply_to_id": 7}]
 
 
 def test_ipad_874_contract_locks_verified_source_and_default_address() -> None:
@@ -301,6 +332,24 @@ def test_ipad_874_link_reply_uses_send_app_type_five() -> None:
     assert "<type>5</type>" in request["body"]["Xml"]
     assert "A&amp;B" in request["body"]["Xml"]
     assert "a=1&amp;b=2" in request["body"]["Xml"]
+
+
+def test_ipad_link_card_requires_recipient_and_wechat_receipt():
+    channel = _build_channel()
+    channel.adapter_config_json = '{"wxid":"bot"}'
+    conversation = Conversation(external_id="group@chatroom", channel_type="wechat_ipad")
+    adapter = WechatIpadAdapter()
+    data = {"BaseResponse": {"ret": 0}, "fromUserName": "bot", "toUserName": "group@chatroom", "newMsgId": 812}
+    for changes, expected in [({}, None), ({"BaseResponse": {"ret": -1}}, "provider_rejected"),
+                              ({"BaseResponse": {}}, "result_unknown"), ({"newMsgId": 0}, "result_unknown"),
+                              ({"toUserName": "other@chatroom"}, "result_unknown"), ({"fromUserName": "other"}, "result_unknown")]:
+        with patch.object(adapter, "_post_json", return_value={"Success": True, "Code": 0, "Data": {**data, **changes}}):
+            result = adapter.send_message(channel, conversation, {"message_type": "link", "url": "https://example.com/info"})
+        assert result["ok"] is (expected is None)
+        if expected:
+            assert result["error_code"] == expected
+        else:
+            assert result["external_message_id"] == "812"
 
 
 def test_wechat_ipad_catalog_uses_platform_managed_endpoint_without_unused_token() -> None:

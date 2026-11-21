@@ -24,6 +24,22 @@ class WechatWeBridgeAdapter(BaseChannelAdapter):
 
     adapter_type = "wechat_webridge"
 
+    def remove_group_member(self, channel: Channel, *, chatroom_external_id: str,
+                            member_external_id: str, request_id: str) -> dict[str, Any]:
+        """按 8080 协议入队移出单个成员，不提交调用方事务或冒充执行成功。"""
+        from app.services.wechat_webridge.service import _runtime, enqueue_command
+
+        bridge = _runtime(channel).get("webridge") or {}
+        if "kick_group_member" not in bridge.get("capabilities", []):
+            return {"ok": False, "status": "unsupported", "error_message": "设备未声明移出成员能力，请更新并重新连接微桥"}
+        job = enqueue_command(
+            channel._sa_instance_state.session, channel, command_name="kick_group_member",
+            args={"room_id": chatroom_external_id, "member_id": member_external_id},
+            request_id=request_id, priority=110,
+        )
+        job.max_attempts = 1
+        return {"ok": True, "status": "pending", "job_id": job.id}
+
     def health_check(self, channel: Channel) -> dict[str, Any]:
         """复用账号清单的在线判定，让过期快照和停用状态及时生效。"""
 
@@ -98,6 +114,9 @@ class WechatWeBridgeAdapter(BaseChannelAdapter):
             message_type = "transfer"
         conversation_id = str(body.get("chat_id") or body.get("room_id") or body.get("from") or "manual").strip() or "manual"
         content = str(body.get("content") or body.get("text") or body.get("message") or "")
+        # 媒体事件可以只有消息编号而没有文字；先生成展示占位，才能进入存档与下载队列。
+        if not content.strip():
+            content = {"image": "[图片]", "voice": "[语音]", "video": "[视频]", "emoji": "[表情]", "file": "[文件]"}.get(message_type, content)
         is_group = bool(body.get("is_group") or body.get("room_id") or str(conversation_id).endswith("@chatroom"))
         details = {
             "headers_used": sorted((headers or {}).keys()),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 import subprocess
 import sys
@@ -97,6 +98,83 @@ def test_alembic_upgrades_empty_database_to_simplified_baseline(tmp_path: Path) 
         actual_indexes = {item["name"] for item in inspector.get_indexes(table_name)}
         assert index_name in actual_indexes
     migration_engine.dispose()
+
+
+def test_vision_migration_preserves_existing_text_settings(tmp_path: Path) -> None:
+    """升级默认关闭视觉，不复用旧密钥；降级也不修改已有聊天配置。"""
+
+    database_path = tmp_path / "vision.db"
+    _run_alembic(database_path, "upgrade", "20261118_0046")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO tenant_ai_settings (tenant_id, enabled, api_base, model, api_key_encrypted, daily_limit, "
+            "chat_enabled, persona, created_at, updated_at) VALUES (1, 1, 'https://chat.example/v1', 'chat', "
+            "'encrypted-fixture', 200, 1, 'persona', '2026-11-21', '2026-11-21')"
+        )
+    _run_alembic(database_path, "upgrade", "20261121_0047")
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT vision_enabled, vision_api_base, vision_model, vision_api_key_encrypted, api_key_encrypted FROM tenant_ai_settings").fetchone() == (0, "", "", None, "encrypted-fixture")
+    _run_alembic(database_path, "downgrade", "20261118_0046")
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT enabled, model, api_key_encrypted FROM tenant_ai_settings").fetchone() == (1, "chat", "encrypted-fixture")
+
+
+def test_provider_migration_preserves_ciphertexts_effective_groups_and_downgrade(tmp_path: Path) -> None:
+    """只搬迁密文并保留群覆盖，坏 JSON 不阻断升级；绘图绝不自动启用。"""
+
+    from sqlalchemy.orm import Session
+    from app.models.entities import Bot, Channel, Chatroom
+    from app.models.saas import Tenant
+
+    database_path = tmp_path / "ai-providers.db"
+    _run_alembic(database_path, "upgrade", "20261121_0047")
+    engine = create_engine(f"sqlite:///{database_path}")
+    room_configs = [
+        {"keep": {"flag": True}, "group_features": {"ai_chat": {"enabled": True, "config": {"api_base": "https://group.example/v1", "api_key": "group-cipher", "model": "group-model", "persona": "room persona"}}}},
+        {"group_features": {"ai_chat": {"enabled": False, "config": {"model": "alias-only"}}}},
+        {"group_features": {"ai_chat": {"enabled": True, "config": {"api_key": "override-cipher"}}}},
+        {"group_features": ["malformed", "preserved"]},
+    ]
+    with Session(engine) as db:
+        db.add(Tenant(id=1, code="migration-test", name="Migration test"))
+        db.add(Bot(id=1, tenant_id=1, name="Migration bot"))
+        db.flush()
+        db.add(Channel(id=1, tenant_id=1, bot_id=1, name="Migration channel", channel_type="wechat_webridge"))
+        db.flush()
+        for index, extra in enumerate(room_configs, start=1):
+            db.add(Chatroom(id=index, tenant_id=1, bot_id=1, channel_id=1, name=f"Room {index}", external_id=f"room-{index}", extra_json=json.dumps(extra)))
+        db.commit()
+    engine.dispose()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("INSERT INTO tenant_ai_settings (tenant_id, enabled, api_base, model, api_key_encrypted, daily_limit, chat_enabled, persona, vision_enabled, vision_api_base, vision_model, vision_api_key_encrypted, created_at, updated_at) VALUES (1, 1, 'https://chat.example/v1', 'chat-model', 'chat-cipher', 200, 1, 'persona', 1, 'https://vision.example/v1', 'vision-model', 'vision-cipher', '2026-11-21', '2026-11-21')")
+    _run_alembic(database_path, "upgrade", "head")
+    with sqlite3.connect(database_path) as connection:
+        connection.row_factory = sqlite3.Row
+        setting = connection.execute("SELECT * FROM tenant_ai_settings").fetchone()
+        providers = {row["id"]: row for row in connection.execute("SELECT * FROM ai_providers")}
+        assert providers[setting["provider_id"]]["api_key_encrypted"] == "chat-cipher"
+        assert providers[setting["vision_provider_id"]]["api_key_encrypted"] == "vision-cipher"
+        assert not setting["image_enabled"] and setting["image_provider_id"] is None
+        assert "api_key_encrypted" not in setting.keys() and "api_base" not in setting.keys()
+        rooms = [json.loads(row[0]) for row in connection.execute("SELECT extra_json FROM chatrooms ORDER BY id")]
+        assert rooms[0]["keep"] == room_configs[0]["keep"]
+        override = rooms[0]["group_features"]["ai_chat"]["config"]
+        assert "api_key" not in override and "api_base" not in override
+        assert providers[int(override["provider_id"])]["api_key_encrypted"] == "group-cipher"
+        assert override["model"] == "group-model" and override["persona"] == "room persona"
+        assert rooms[1] == room_configs[1]
+        inherited = rooms[2]["group_features"]["ai_chat"]["config"]
+        assert inherited["model"] == "chat-model"
+        assert providers[int(inherited["provider_id"])]["api_base"] == "https://chat.example/v1"
+        assert providers[int(inherited["provider_id"])]["api_key_encrypted"] == "override-cipher"
+        assert rooms[3] == room_configs[3]
+        assert connection.execute("SELECT COUNT(*) FROM ai_image_attempts").fetchone()[0] == 0
+    _run_alembic(database_path, "downgrade", "20261121_0047")
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT api_key_encrypted, vision_api_key_encrypted, model FROM tenant_ai_settings").fetchone() == ("chat-cipher", "vision-cipher", "chat-model")
+        restored = json.loads(connection.execute("SELECT extra_json FROM chatrooms WHERE id = 1").fetchone()[0])
+        assert restored == room_configs[0]
+    _run_alembic(database_path, "upgrade", "head")
 
 
 def test_database_revision_guard_accepts_head_and_rejects_stale_revision(tmp_path: Path) -> None:

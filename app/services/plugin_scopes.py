@@ -27,8 +27,26 @@ def plugin_group_conversation_enabled(db: Session, *, channel: Channel, conversa
         plugin = db.scalar(select(Plugin).where(Plugin.code == plugin_code))
         if plugin is None or plugin.platform_status != "active" or plugin.missing_at is not None:
             return False
+    if plugin_code == "group_feature:moderation":
+        from app.services.group_features.store import is_enabled
+
+        # 治理提示同样服从当前群开关；关闭后不能继续发送队列里的警告或处罚通知。
+        if (not channel.is_enabled or conversation.tenant_id != channel.tenant_id
+                or conversation.bot_id != channel.bot_id or conversation.channel_id != channel.id):
+            return False
+        room = db.scalar(select(Chatroom).where(
+            Chatroom.tenant_id == channel.tenant_id, Chatroom.bot_id == channel.bot_id,
+            Chatroom.channel_id == channel.id, Chatroom.external_id == conversation.external_id,
+        ))
+        return bool(room and room.status != "left" and room.management_status != "archived" and is_enabled(room, "moderation"))
     # AI 核心和内置群功能有各自的设置入口，不属于可绑定的目录插件。
-    if conversation.chat_type != "group" or not plugin_code or plugin_code == "ai_dispatch" or plugin_code.startswith("group_feature:"):
+    if not plugin_code or plugin_code == "ai_dispatch" or plugin_code.startswith("group_feature:"):
+        return True
+    # 卸载/停用后已经排队的群聊和私聊也必须停止，不能只依赖入队时的授权。
+    plugin = db.scalar(select(Plugin).where(Plugin.code == plugin_code))
+    if plugin is None or plugin.platform_status != "active" or plugin.missing_at is not None:
+        return False
+    if conversation.chat_type != "group":
         return True
     binding = db.scalar(
         select(BotPlugin).join(Plugin, Plugin.id == BotPlugin.plugin_id).where(

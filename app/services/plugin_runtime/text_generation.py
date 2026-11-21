@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import base64
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from app.services.plugin_runtime.http_client import PluginHttpClient, PluginHttpError, PluginHttpResponse
@@ -16,6 +17,15 @@ class PluginTextGenerationResult:
 
     text: str
     token_usage: int
+
+
+@dataclass(frozen=True)
+class GenerationImage:
+    """已校验的有限图片字节，不允许模型服务代取任意 URL 或本地路径。"""
+
+    data: bytes = field(repr=False)
+    mime_type: str = "image/jpeg"
+    caption: str = ""
 
 
 class PluginTextGenerationClient:
@@ -45,17 +55,30 @@ class PluginTextGenerationClient:
         timeout_seconds: int = 60,
         temperature: float = 0.3,
         max_tokens: int = 1600,
+        images: tuple[GenerationImage, ...] = (),
     ) -> PluginTextGenerationResult:
         """调用标准 chat completion，并只解析首条文本与总 token 数。"""
 
         normalized_prompt = str(user_prompt or "").strip()
         if not normalized_prompt:
             raise PluginTextGenerationError("文本生成提示词不能为空")
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
         normalized_system = str(system_prompt or "").strip()
         if normalized_system:
             messages.append({"role": "system", "content": normalized_system})
-        messages.append({"role": "user", "content": normalized_prompt})
+        content: str | list[dict[str, Any]] = normalized_prompt
+        if images:
+            if len(images) > 8:
+                raise PluginTextGenerationError("一次最多分析 8 张图片或视频帧")
+            content = [{"type": "text", "text": normalized_prompt}]
+            for picture in images:
+                if picture.mime_type not in {"image/jpeg", "image/png"} or not 0 < len(picture.data) <= 2 * 1024 * 1024:
+                    raise PluginTextGenerationError("模型图片格式无效或超过 2 MiB")
+                if picture.caption:
+                    content.append({"type": "text", "text": picture.caption[:200]})
+                encoded = base64.b64encode(picture.data).decode("ascii")
+                content.append({"type": "image_url", "image_url": {"url": f"data:{picture.mime_type};base64,{encoded}"}})
+        messages.append({"role": "user", "content": content})
         body = {
             "model": self.model,
             "messages": messages,
@@ -75,7 +98,7 @@ class PluginTextGenerationClient:
                 connect_timeout_seconds=max(1, min(int(timeout_seconds), 300)),
                 total_timeout_seconds=max(5, min(int(timeout_seconds), 300)),
                 max_response_bytes=2 * 1024 * 1024,
-                max_redirects=2,
+                max_redirects=0 if images else 2,
             )
         except PluginHttpError as exc:
             raise PluginTextGenerationError("文本生成服务暂时不可用") from exc

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 from sqlalchemy import func, select
@@ -18,7 +18,7 @@ from app.core.logging import get_logger
 from app.core.time import now_shanghai
 from app.models.entities import AiDecision, Chatroom, TenantAiSetting
 from app.services.plugin_runtime.text_generation import PluginTextGenerationClient, PluginTextGenerationError
-from app.services.security import decrypt_secret, encrypt_secret
+from app.services import ai_providers, ai_vision, ai_drawing
 
 logger = get_logger(__name__)
 
@@ -58,34 +58,52 @@ def save_ai_setting(
     db: Session,
     *,
     enabled: bool,
-    api_base: str,
+    provider_id: int | None,
     model: str,
-    api_key: str,
     chat_enabled: bool = False,
     persona: str = "",
+    vision_enabled: bool | None = None,
+    vision_provider_id: int | None = None,
+    vision_model: str = "",
+    image_enabled: bool | None = None,
+    image_provider_id: int | None = None,
+    image_model: str = "",
+    image_daily_limit: int = 20,
 ) -> TenantAiSetting:
-    """保存 AI 设置。api_key 留空表示沿用已有密钥，页面不会回显密钥。"""
+    """能力设置只保存供应商引用和模型，不再接收任何接口密钥。"""
 
+    provider_id, model = ai_providers.validate_selection(db, provider_id, model, required=enabled)
+    if vision_enabled is not None:
+        vision_provider_id, vision_model = ai_providers.validate_selection(db, vision_provider_id, vision_model, required=vision_enabled)
+    if image_enabled is not None:
+        image_provider_id, image_model = ai_providers.validate_selection(db, image_provider_id, image_model, required=image_enabled)
+        if not 1 <= int(image_daily_limit) <= 200:
+            raise ValueError("每日绘图次数必须在 1 到 200 之间")
     setting = get_ai_setting(db)
     if setting is None:
         setting = TenantAiSetting(daily_limit=DEFAULT_DAILY_LIMIT)
         db.add(setting)
+    if vision_enabled is not None:
+        setting.vision_enabled = bool(vision_enabled)
+        setting.vision_provider_id, setting.vision_model = vision_provider_id, vision_model
+    if image_enabled is not None:
+        setting.image_enabled = bool(image_enabled)
+        setting.image_provider_id, setting.image_model = image_provider_id, image_model
+        setting.image_daily_limit = int(image_daily_limit)
     setting.enabled = bool(enabled)
-    setting.api_base = str(api_base or "").strip().rstrip("/")
-    setting.model = str(model or "").strip()
+    setting.provider_id, setting.model = provider_id, model
     setting.chat_enabled = bool(chat_enabled)
     # 人格是多行文本，保留换行，只限制长度；注入提示前还会再压成单行。
     setting.persona = str(persona or "").strip()[:2000]
-    if str(api_key or "").strip():
-        setting.api_key_encrypted = encrypt_secret(str(api_key).strip())
     db.flush()
+    db.expire(setting, ["provider", "vision_provider", "image_provider"])
     return setting
 
 
 def is_ai_ready(setting: TenantAiSetting | None) -> bool:
     """总开关打开且地址、模型、密钥齐全才算可用。"""
 
-    return bool(setting and setting.enabled and setting.api_base and setting.model and setting.api_key_encrypted)
+    return bool(setting and setting.enabled and setting.model and ai_providers.ready(setting.provider, setting.tenant_id))
 
 
 @dataclass(frozen=True)
@@ -98,7 +116,7 @@ class ModelConfig:
 
     api_base: str
     model: str
-    api_key: str
+    api_key: str = field(repr=False)
     chat_enabled: bool = False
     persona: str = ""
 
@@ -106,10 +124,13 @@ class ModelConfig:
 def snapshot_setting(setting: TenantAiSetting) -> ModelConfig:
     """在会话有效期内把设置固化成脱离会话的快照，密钥此时解密。"""
 
+    provider = ai_providers.snapshot(setting.provider, setting.tenant_id, setting.model)
+    if provider is None:
+        raise ValueError("对话供应商未配置或已停用")
     return ModelConfig(
-        api_base=setting.api_base,
+        api_base=provider.api_base,
         model=setting.model,
-        api_key=decrypt_secret(setting.api_key_encrypted) or "",
+        api_key=provider.api_key,
         chat_enabled=bool(setting.chat_enabled),
         persona=setting.persona or "",
     )
@@ -131,6 +152,8 @@ class AiResolution:
     # 群名(用作记忆库的可读显示名)与群记录 ID;私聊为空。
     group_name: str = ""
     chatroom_id: int | None = None
+    vision_config: ai_vision.VisionConfig | None = None
+    image_config: ai_drawing.ImageConfig | None = None
 
 
 def resolve_for_conversation(
@@ -144,7 +167,7 @@ def resolve_for_conversation(
 
     - 租户「AI 助手」总开关是前提(意图路由和聊天都受它控制),额度也按租户统计。
     - 群聊:聊天由本群的「AI 对话」群功能控制(群已启用为前提);**群里没单独设置过时跟随租户的聊天开关**,
-      设置过就以群为准。群里填了的接口地址/模型/密钥/人格覆盖租户设置,没填的项沿用租户设置。
+      设置过就以群为准。群供应商选择完整连接，未选择时可沿用租户供应商并单独覆盖模型和人格。
     - 私聊:聊天由租户设置里的开关控制,模型和人格用租户设置。
     """
 
@@ -172,20 +195,33 @@ def resolve_for_conversation(
         web_search = bool(override.web_search) if override else True
         group_name = str((room.remark or room.name or "") if room is not None else "")
         chatroom_id = int(room.id) if room is not None else None
+    # 群选择的是完整连接；显式停用/失效的群供应商不能借用租户的另一把密钥。
+    provider = setting.provider
+    if override and override.provider_id is not None:
+        from app.models.entities import AiProvider
+
+        provider = db.get(AiProvider, override.provider_id)
+    selected_model = (override.model if override and override.provider_id is not None else
+                      override.model if override and override.model else setting.model) or ""
+    connection = ai_providers.snapshot(provider, setting.tenant_id, selected_model)
+    if connection is None:
+        return None
     config = ModelConfig(
-        api_base=(override.api_base if override and override.api_base else setting.api_base) or "",
-        model=(override.model if override and override.model else setting.model) or "",
-        api_key=(override.api_key if override and override.api_key else decrypt_secret(setting.api_key_encrypted)) or "",
+        api_base=connection.api_base,
+        model=connection.model,
+        api_key=connection.api_key,
         chat_enabled=chat_enabled,
         persona=(override.persona if override and override.persona else setting.persona) or "",
     )
     # 地址、模型、密钥合并后仍不齐全就不可用(例如租户没配、群里也没配全)。
     if not (config.api_base and config.model and config.api_key):
         return None
-    return AiResolution(setting=setting, config=config, chat_enabled=chat_enabled, memory_enabled=memory_enabled, memory_all=memory_all, web_search=web_search, group_name=group_name, chatroom_id=chatroom_id)
+    vision_config = ai_vision.snapshot_setting(setting) if not override or override.vision_enabled else None
+    image_config = ai_drawing.snapshot_setting(setting) if chat_enabled and (chat_type == "direct" or override and override.image_enabled) else None
+    return AiResolution(setting=setting, config=config, chat_enabled=chat_enabled, memory_enabled=memory_enabled, memory_all=memory_all, web_search=web_search, group_name=group_name, chatroom_id=chatroom_id, vision_config=vision_config, image_config=image_config)
 
 
-def _build_client(config: ModelConfig) -> PluginTextGenerationClient:
+def _build_client(config: ModelConfig | ai_vision.VisionConfig) -> PluginTextGenerationClient:
     return PluginTextGenerationClient(api_base=config.api_base, model=config.model, api_key=config.api_key)
 
 
@@ -325,7 +361,7 @@ def analyze_intent(config: ModelConfig, text: str, catalog: list[dict[str, Any]]
     return validate_model_output(result.text, catalog)
 
 
-def prepare_intent(db: Session, payload: dict[str, Any]):
+def prepare_intent(db: Session, payload: dict[str, Any], *, allow_media_request: bool = True):
     """第一阶段（持有会话、不访问网络）：重新核对条件，取模型快照、原文、目录和聊天上下文。
 
     返回 (config, text, catalog, chat)；chat 为 None 表示没开聊天兜底。
@@ -333,13 +369,16 @@ def prepare_intent(db: Session, payload: dict[str, Any]):
     """
 
     from app.models.entities import Channel
-    from app.services import ai_chat, ai_memory
+    from app.services import ai_chat, ai_memory, ai_media
+    from app.services.self_sent import is_self_sent
     from app.services.inbound_policy import expired_message_dispatch
     from app.services.plugin_directory import build_static_dispatch_plan
 
     channel = db.get(Channel, int(payload.get("channel_id") or 0))
     event = payload.get("normalized_event")
     if channel is None or not isinstance(event, dict):
+        return None
+    if is_self_sent(event):
         return None
     # 已有 AI 任务积压时，在准备上下文和请求模型前跳过，避免迟到响应与额外调用。
     if expired_message_dispatch(event) is not None:
@@ -394,6 +433,9 @@ def prepare_intent(db: Session, payload: dict[str, Any]):
             web_search=resolved.web_search,
             tenant_id=int(channel.tenant_id),
         )
+        chat = replace(chat, vision_config=resolved.vision_config, media=ai_media.prepare_input(
+            db, channel, payload, enabled=resolved.vision_config is not None, allow_request=allow_media_request,
+        ))
     return resolved.config, text, catalog, chat
 
 

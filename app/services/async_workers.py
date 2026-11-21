@@ -22,6 +22,8 @@ from app.services.channel_adapters import dispatch_outbound_message
 from app.services.channel_runtime import run_due_channel_tasks
 from app.services.inbound_media import download_wechat_media_attachment, mark_attachment_failed
 from app.services.open_webhooks import dispatch_open_message_event, process_open_webhook_delivery_job
+from app.services.wechat_ipad import recall as ipad_recall
+from app.services.group_moderation import ipad as ipad_moderation
 from app.services.group_features.dispatch import consumed_command, dispatch_group_features
 from app.services.plugin_directory import build_dispatch_report, serialize_dispatch_report
 from app.services.inbound_policy import expired_message_dispatch
@@ -156,6 +158,8 @@ def _recover_running_jobs_for_all_tenants() -> int:
                     PLUGIN_DISPATCH_JOB,
                     PLUGIN_SCHEDULED_ACTION_JOB,
                     OUTBOUND_DISPATCH_JOB,
+                    ipad_recall.JOB_TYPE,
+                    ipad_moderation.JOB_TYPE,
                     INBOUND_MEDIA_FETCH_JOB,
                     MAIBOT_MEDIA_FORWARD_JOB,
                     OPEN_WEBHOOK_DELIVERY_JOB,
@@ -192,6 +196,8 @@ def _run_single_job() -> bool:
                 PLUGIN_DISPATCH_JOB,
                 PLUGIN_SCHEDULED_ACTION_JOB,
                 OUTBOUND_DISPATCH_JOB,
+                ipad_recall.JOB_TYPE,
+                ipad_moderation.JOB_TYPE,
                 INBOUND_MEDIA_FETCH_JOB,
                 MAIBOT_MEDIA_FORWARD_JOB,
                 OPEN_WEBHOOK_DELIVERY_JOB,
@@ -221,6 +227,12 @@ def _run_single_job() -> bool:
                 result = process_plugin_scheduled_action_job(db, job, payload)
             elif job.job_type == OUTBOUND_DISPATCH_JOB:
                 result = _process_outbound_dispatch_job(db, job, payload)
+            elif job.job_type == ipad_recall.JOB_TYPE:
+                ipad_recall.process(db, job, payload)
+                return True
+            elif job.job_type == ipad_moderation.JOB_TYPE:
+                ipad_moderation.process(db, job, payload)
+                return True
             elif job.job_type == INBOUND_MEDIA_FETCH_JOB:
                 result = _process_inbound_media_fetch_job(db, payload)
             elif job.job_type == MAIBOT_MEDIA_FORWARD_JOB:
@@ -322,6 +334,20 @@ def _process_plugin_dispatch_job(db: Session, payload: dict[str, Any]) -> dict[s
             db.commit()
         return {'dispatch': expired, 'raw_event_id': raw_event_id,
             'executed_plugins': [], 'executed_group_features': []}
+    # 治理独立于普通回复规则和插件消费顺序；命中后不能再触发 AI、积分或其他副作用。
+    from app.services.group_moderation.service import check_message
+
+    moderation = check_message(db, channel, normalized_event, conversation_id=conversation_id,
+                               message_id=message_id, raw_event_id=raw_event_id)
+    if moderation is not None:
+        summary = {"mode": "moderation", **moderation}
+        raw_event = db.get(RawWebhookEvent, raw_event_id) if raw_event_id else None
+        if raw_event is not None:
+            raw_event.dispatch_summary_json = dump_json_for_text_column(summary)
+            raw_event.status = "dispatched"
+        db.commit()
+        return {"dispatch": summary, "raw_event_id": raw_event_id,
+                "executed_plugins": [], "executed_group_features": ["moderation"]}
     # 群功能(成员变更提醒、潜水排行、自动抢红包、自动收款等)只看群自己的开关,先于插件调度执行;
     # 命令被群功能处理后不再交给 AI 兜底。
     executed_features = dispatch_group_features(db, channel, normalized_event, conversation_id=conversation_id)

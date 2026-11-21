@@ -260,6 +260,11 @@ def remember_outbound(channel: Channel, conversation: Conversation, message: Mes
     if not capabilities(channel, conversation)["revoke"]:
         logger.info("plugin auto revoke skipped: channel unsupported", extra=identity)
         return
+    if channel.channel_type == "wechat_ipad":
+        from app.services.wechat_ipad.recall import recall_params
+
+        if not recall_params(channel, conversation, message):
+            return
     if not queue.remember(**identity, policy=policy):
         logger.warning("plugin auto revoke skipped: memory queue full", extra=identity)
     else:

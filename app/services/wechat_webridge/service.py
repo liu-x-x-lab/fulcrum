@@ -160,6 +160,11 @@ def reap_stale_commands(db: Session, channel: Channel) -> int:
     for job in jobs:
         if int(parse_job_payload(job).get("channel_id") or 0) != int(channel.id):
             continue
+        if job.related_type == "group_moderation":
+            from app.services.group_moderation.actions import settle_timeout
+
+            if not settle_timeout(db, channel, job):
+                continue
         settle_outbound_message(db, job, ok=False, error="webridge_command_timeout")
         fail_job_terminal(db, job, error_message="webridge_command_timeout", result={"timeout_seconds": COMMAND_RUNNING_TIMEOUT_SECONDS})
         reaped += 1
@@ -854,6 +859,12 @@ def claim_commands(db: Session, channel: Channel, payload: dict[str, Any], limit
         data = parse_job_payload(job)
         if int(data.get("channel_id") or 0) != int(channel.id):
             continue
+        # 治理命令先检查撤销条件；账号关闭时也要清理旧处罚，不能重新启用后补踢。
+        if job.related_type == "group_moderation":
+            from app.services.group_moderation.actions import claim_allowed
+
+            if not claim_allowed(db, channel, job):
+                continue
         if cancel_disallowed_plugin_outbound_job(db, channel=channel, job=job, payload=data):
             if data.get("plugin_code") in {"maibot_adapter", "douyin_parser"}:
                 settle_outbound_message(db, job, ok=False, error=job.error_message)
@@ -868,7 +879,7 @@ def claim_commands(db: Session, channel: Channel, payload: dict[str, Any], limit
             settle_outbound_message(db, job, ok=False, error="消息已超过 2 分钟，无法撤回")
             fail_job_terminal(db, job, error_message="消息已超过 2 分钟，无法撤回", result={})
             continue
-        if (job.related_type in {"webridge_friend_check", "webridge_friend_action"}
+        if (job.related_type in {"webridge_friend_check", "webridge_friend_action", "group_moderation"}
                 or data.get("plugin_code") == "douyin_parser"):
             # 原子领取防止并发 poll 重复执行好友操作、视频或超限卡片。
             claimed = db.execute(update(TaskJob).where(
@@ -1075,6 +1086,10 @@ def accept_command_result(db: Session, channel: Channel, payload: dict[str, Any]
         stored_request_id = text(as_object(data.get("command")).get("request_id"))
         if job_id <= 0 and stored_request_id != request_id:
             continue
+        if job.related_type == "group_moderation":
+            from app.services.group_moderation.actions import accept_result
+
+            return accept_result(db, channel, job, payload)
         if job.status in {"completed", "failed"}:
             _persist_friend_operation(db, channel, job)
             return {"ok": True, "deduplicated": True, "job_id": int(job.id), "status": job.status}

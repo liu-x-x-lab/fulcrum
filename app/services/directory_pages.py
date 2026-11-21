@@ -14,9 +14,9 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.services.points import PointsService
-from app.models.entities import Bot, BotPlugin, Channel, Chatroom, ChatroomMember, Conversation, GroupPluginScope, WorkWechatContact
+from app.models.entities import Bot, BotPlugin, Channel, Chatroom, ChatroomMember, Conversation, GroupPluginScope
 from app.services.chatroom_registry import MANAGEMENT_STATUS_LABELS
-from app.services.channel_catalog import channel_supports
+from app.services.friend_directory import friend_chat_fields, friend_rows
 from app.services.identity_directory import _avatar_from_extra, make_identity
 from app.services.plugin_directory import GROUP_SCOPED_CHANNEL_TYPES
 from app.services.plugin_governance import tenant_visible_plugins
@@ -24,8 +24,6 @@ from app.services.plugin_governance import tenant_visible_plugins
 PAGE_SIZE = 30
 # 群运行模式在列表里的中文说法,与群详情共用 chatroom_registry 里的定义。
 MANAGEMENT_LABELS = MANAGEMENT_STATUS_LABELS
-# 渠道里“好友”类联系人;企微等其他渠道的联系人类型不同,这里只取个人好友。
-FRIEND_KIND = "friend"
 
 
 def _like(keyword: str) -> str:
@@ -51,7 +49,8 @@ def _page(total: int, page: int) -> dict[str, Any]:
 def channel_options(db: Session) -> list[dict[str, Any]]:
     """可供筛选的渠道:只列出有群或好友资料的渠道,名称取渠道自己的显示名。"""
 
-    return [{"id": int(item.id), "name": item.name or f"账号 #{item.id}"} for item in db.scalars(select(Channel).where(Channel.deleted_at.is_(None)).order_by(Channel.id.asc())).all()]
+    return [{"id": int(item.id), "name": item.name or f"账号 #{item.id}", "channel_type": item.channel_type}
+            for item in db.scalars(select(Channel).where(Channel.deleted_at.is_(None)).order_by(Channel.id.asc())).all()]
 
 
 def chatroom_plugin_options(db: Session, tenant_id: int) -> list[dict[str, Any]]:
@@ -215,26 +214,24 @@ def build_contact_directory(db: Session, *, keyword: str = "", channel_id: int =
     """好友列表:每个好友一行,带头像昵称、备注、所属账号、共同所在的群数,并可发起聊天。"""
 
     q = (keyword or "").strip()[:100]
-    stmt = select(WorkWechatContact).where(
-        WorkWechatContact.contact_kind == FRIEND_KIND,
-        WorkWechatContact.channel_id.in_(select(Channel.id).where(Channel.deleted_at.is_(None))),
-    )
+    visible_channels = select(Channel).where(Channel.deleted_at.is_(None))
     if channel_id:
-        stmt = stmt.where(WorkWechatContact.channel_id == channel_id)
+        visible_channels = visible_channels.where(Channel.id == channel_id)
+    channels = {item.id: item for item in db.scalars(visible_channels)}
+    friends = friend_rows(channels.values())
+    c = friends.c
+    stmt = select(friends)
     if q:
         like = _like(q)
         stmt = stmt.where(
             or_(
-                WorkWechatContact.display_name.like(like, escape="\\"),
-                WorkWechatContact.name.like(like, escape="\\"),
-                WorkWechatContact.contact_external_id.like(like, escape="\\"),
+                c.display_name.like(like, escape="\\"), c.name.like(like, escape="\\"),
+                c.alias.like(like, escape="\\"), c.contact_external_id.like(like, escape="\\"),
             )
         )
     total = int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
     paging = _page(total, page)
-    contacts = db.scalars(stmt.order_by(WorkWechatContact.display_name.asc(), WorkWechatContact.id.desc()).offset(paging["offset"]).limit(PAGE_SIZE)).all()
-
-    channels = {int(item.id): item for item in db.scalars(select(Channel).where(Channel.deleted_at.is_(None))).all()}
+    contacts = db.execute(stmt.order_by(c.display_name, c.id.desc(), c.channel_id).offset(paging["offset"]).limit(PAGE_SIZE)).all()
     # 按账号与机器人状态批量计算写入口资格；不逐行查询，也不为已失效账号展示操作按钮。
     active_bot_ids = set(db.scalars(select(Bot.id).where(Bot.deleted_at.is_(None), Bot.is_enabled.is_(True))).all())
     # 本页好友各自所在的群数、以及与好友的私聊会话,一次性批量取,避免逐行查询。
@@ -258,22 +255,17 @@ def build_contact_directory(db: Session, *, keyword: str = "", channel_id: int =
     rows = []
     for item in contacts:
         key = (int(item.channel_id), item.contact_external_id)
-        channel = channels.get(int(item.channel_id))
-        can_start_chat = bool(channel and channel.is_enabled and channel.bot_id in active_bot_ids
-            and item.sync_status == "active" and item.deleted_at is None and str(item.contact_external_id or "").strip()
-            and channel_supports(channel.channel_type, "direct_chat"))
+        channel = channels[item.channel_id]
         rows.append(
             {
-                "channel_id": int(item.channel_id),
-                "contact_id": int(item.id),
-                "channel_type": (channels[int(item.channel_id)].channel_type if int(item.channel_id) in channels else ""),
-                "channel_name": (channels[int(item.channel_id)].name if int(item.channel_id) in channels else "") or f"账号 #{item.channel_id}",
+                **friend_chat_fields(channel, item, channel.bot_id in active_bot_ids),
+                "channel_type": channel.channel_type,
+                "channel_name": channel.name or f"账号 #{item.channel_id}",
                 "identity": make_identity(item.contact_external_id, item.display_name or item.name, item.avatar_url),
-                "remark": item.display_name if item.name and item.display_name and item.display_name != item.name else "",
+                "remark": item.remark,
                 "group_count": group_counts.get(key, 0),
                 "points": totals.get(item.contact_external_id, 0),
                 "conversation_id": conversation_ids.get(key),
-                "can_start_chat": can_start_chat,
             }
         )
     return {"rows": rows, "paging": paging, "keyword": q, "channel_id": channel_id}

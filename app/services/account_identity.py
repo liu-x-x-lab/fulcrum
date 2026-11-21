@@ -26,6 +26,10 @@ def account_identity(channel: Channel) -> dict[str, Any]:
     bridge = runtime.get("webridge") if isinstance(runtime.get("webridge"), dict) else {}
     profile = runtime.get("account_profile") if isinstance(runtime.get("account_profile"), dict) else {}
     account_id = str(connection.get("account_id") or bridge.get("account_id") or profile.get("account_id") or "").strip()
+    if channel.channel_type == "wechat_ipad":
+        from app.services.wechat_ipad.common import _parse_json, _resolve_wxid
+
+        account_id = _resolve_wxid(channel, runtime, _parse_json(channel.adapter_config_json))
     name = str(connection.get("display_name") or channel.name or "").strip()
     return make_identity(account_id, name or channel.name, profile.get("avatar_url") or "")
 

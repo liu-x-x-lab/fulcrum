@@ -6,7 +6,6 @@ _EXPORTS = {
     "auto_recover_wechat_ipad_login": "app.services.wechat_ipad.operations.recovery",
     "build_wechat_ipad_chatroom_list": "app.services.wechat_ipad.views.groups",
     "build_wechat_ipad_chatroom_detail": "app.services.wechat_ipad.group_details",
-    "build_wechat_ipad_contact_list": "app.services.wechat_ipad.views.contacts",
     "build_wechat_ipad_group_summary": "app.services.wechat_ipad.views.groups",
     "build_wechat_ipad_overview": "app.services.wechat_ipad.views.overview",
     "heartbeat_wechat_ipad_channel": "app.services.wechat_ipad.operations.heartbeat",

@@ -18,6 +18,8 @@ tmp
 memory
 # 本地备份(含数据库导出)、工具会话和内部文档不进入镜像构建上下文。
 backups
+# 插件卸载恢复副本可能包含本地资源，不复制进应用镜像。
+plugins/_uninstalled
 .rcodex
 projects
 sessions

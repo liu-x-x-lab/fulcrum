@@ -63,7 +63,7 @@ async def update_chatroom_feature_action(request: Request, channel_id: int, chat
         try:
             save_group_feature_form(chatroom, feature_key, form)
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
+            return JSONResponse({"ok": False, "notice": str(exc)}, status_code=400)
         db.commit()
         record_audit(db, "channel.chatroom-feature.update", "chatroom", chatroom.id, f"{feature_key} by {user.username}")
         feature = get_group_feature(feature_key)

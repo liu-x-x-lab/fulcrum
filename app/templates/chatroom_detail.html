@@ -9,12 +9,12 @@
 {% block hero_actions %}
 <div class="hero-action-cluster">
   
-  {% if detail.sync_action or channel.channel_type == 'wechat_ipad' or channel.channel_type == 'workwechat' %}
+  {% if can_sync and (detail.sync_action or channel.channel_type == 'wechat_ipad' or channel.channel_type == 'workwechat') %}
   <form method="post" action="{{ detail.sync_action or (base_url ~ '/sync') }}{{ return_query }}" data-action-feedback>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     {# 普通表单与进度反馈均停留在当前标签，避免从资料页同步后跳回群功能。 #}
     <input type="hidden" name="tab" value="{{ tab }}" />
-    <button class="btn btn-secondary" type="submit">{{ detail.sync_button_label or '同步当前群' }}</button>
+    <button class="btn btn-secondary" type="submit">{{ '同步群资料' if channel.channel_type == 'wechat_ipad' else detail.sync_button_label or '同步当前群' }}</button>
   </form>
   {% endif %}
 </div>
@@ -73,7 +73,7 @@
     </div>
   </form>
   {% for item in features %}
-  {% call config_card(item, base_url ~ '/features/' ~ item.key, base_url ~ '/features/' ~ item.key ~ '/toggle', base_url ~ '/features/' ~ item.key) %}{% if ledgers.get(item.key) %}{{ payment_ledger(ledgers[item.key]) }}{% endif %}{% if item.key == 'trigger_reply' %}<div class="gf-body"><a class="btn btn-secondary" href="{{ base_url }}/triggers"><span class="i i-sliders" aria-hidden="true"></span><span>管理触发规则</span></a></div>{% endif %}{% endcall %}
+  {% call config_card(item, base_url ~ '/features/' ~ item.key, base_url ~ '/features/' ~ item.key ~ '/toggle', base_url ~ '/features/' ~ item.key) %}{% if ledgers.get(item.key) %}{{ payment_ledger(ledgers[item.key]) }}{% endif %}{% if item.key == 'moderation' %}{% include '_group_moderation_ledger.html' %}{% endif %}{% if item.key == 'trigger_reply' %}<div class="gf-body"><a class="btn btn-secondary" href="{{ base_url }}/triggers"><span class="i i-sliders" aria-hidden="true"></span><span>管理触发规则</span></a></div>{% endif %}{% endcall %}
   {% endfor %}
   </div>
 
@@ -136,7 +136,19 @@
     <section class="chatroom-profile-section" aria-labelledby="chatroom-basics-title">
       <div class="section-head"><h2 id="chatroom-basics-title">基本资料</h2></div>
       <dl class="chatroom-profile-facts">
-        <div><dt>群名</dt><dd>{{ detail.name }}</dd></div>
+        <div><dt>群名</dt><dd>{{ detail.name }}
+          {% if detail.can_rename %}
+          <details class="disclosure">
+            <summary><span class="i i-edit" aria-hidden="true"></span> 修改微信群名</summary>
+            <form method="post" action="{{ base_url }}/rename{{ return_query }}" data-action-feedback data-action-label="修改微信群名">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="expected_name" value="{{ chatroom.name or '' }}">
+              <label>新群名<input name="name" value="{{ chatroom.name or '' }}" maxlength="255" required></label>
+              <button class="btn btn-small btn-primary" type="submit">确认改名</button>
+            </form>
+          </details>
+          {% endif %}
+        </dd></div>
         <div><dt>群主</dt><dd>{{ profile.owner_name }}</dd></div>
         <div><dt>备注</dt><dd>{{ detail.remark }}</dd></div>
         <div><dt>本地状态</dt><dd>{{ detail.status_label }}</dd></div>
@@ -157,17 +169,17 @@
         {% if profile.notice.state == 'not_cached' %}
         <p class="muted-text">手机暂未缓存公告。可先在微信中打开群公告，再点击“同步群资料”。</p>
         {% elif profile.notice.state == 'not_fetched' and not profile.notice.last_error %}
-        <p class="muted-text">暂未获取群公告，点击右上角“同步群资料”读取。</p>
+        <p class="muted-text">暂未获取群公告。</p>
         {% elif profile.notice.state == 'summary' %}
         <p class="muted-text">当前仅获取到摘要，公告正文尚未缓存。</p>
         {% elif profile.notice.state == 'empty' %}
-        <p class="muted-text">手机公告缓存中暂未读到文字内容，可在微信中确认后重新同步。</p>
+        <p class="muted-text">{{ '本次读取的群公告为空。' if channel.channel_type == 'wechat_ipad' else '手机公告缓存中暂未读到文字内容，可在微信中确认后重新同步。' }}</p>
         {% endif %}
         {% if profile.notice.last_error %}
         <p class="chatroom-notice-error">本次公告读取失败{% if profile.notice.body %}，以上保留上次获取的内容{% endif %}。{{ profile.notice.last_error }}</p>
         {% endif %}
         {% if profile.notice.fetched_at %}
-        <p class="muted-text chatroom-notice-meta">{{ '检查时间' if profile.notice.state == 'not_cached' else '获取时间' }}：{{ profile.notice.fetched_at|bj_time }} · 来自手机缓存，可能与微信中当前内容不同。</p>
+        <p class="muted-text chatroom-notice-meta">{{ '检查时间' if profile.notice.state == 'not_cached' else '获取时间' }}：{{ profile.notice.fetched_at|bj_time }}{% if channel.channel_type == 'wechat_webridge' %} · 来自手机缓存，可能与微信中当前内容不同。{% endif %}</p>
         {% endif %}
         {% if profile.notice.last_error and profile.notice.checked_at %}
         <p class="muted-text chatroom-notice-meta">本次尝试：{{ profile.notice.checked_at|bj_time }}</p>
@@ -190,6 +202,7 @@
 </section>
 {% endblock %}
 {% block scripts %}
+<script src="/static/js/ai-models.js" defer></script>
 <script src="/static/js/group-features.js" defer></script>
 <script src="/static/js/plugin-delivery-settings.js" defer></script>
 {% if tab == 'members' %}<script src="/static/js/chatroom-invitations.js" defer></script>{% endif %}

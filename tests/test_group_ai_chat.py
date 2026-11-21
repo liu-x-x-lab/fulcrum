@@ -1,10 +1,11 @@
-"""群级 AI 对话:开关、独立模型(含密钥加密不回显)、人格覆盖,以及自动下载附件群功能。"""
+"""群级 AI 对话：开关、完整供应商选择、人格覆盖及自动下载附件。"""
 
 from __future__ import annotations
 
 import json
 import os
 import tempfile
+import pytest
 
 os.environ.setdefault("LOG_DIR", tempfile.mkdtemp(prefix="group-ai-logs-"))
 
@@ -16,6 +17,7 @@ from app.services.group_features.registry import get_feature
 from app.services.group_features.view import build_feature_cards, save_from_form
 from tests.test_ai_chat import _session
 from tests.test_ai_dispatch import _seed
+from tests.test_ai_providers import add_provider
 
 
 def _room(db, channel, active: bool = True) -> Chatroom:
@@ -88,26 +90,28 @@ def test_group_overrides_model_partially_and_persona() -> None:
     save_state(room, "ai_chat", enabled=True, config={"model": "big-model", "persona": "群里的小牛"})
     cfg = _resolve(db, channel).config
     assert (cfg.api_base, cfg.model, cfg.api_key, cfg.persona) == ("https://llm.test/v1", "big-model", "k", "群里的小牛")
-    # 群里完整配一套独立模型(含密钥)
-    save_state(room, "ai_chat", enabled=True, config={"api_base": "https://other.test/v1/", "model": "x", "api_key": "group-key", "persona": ""})
+    provider = add_provider(db, api_base="https://other.test/v1/", api_key="group-key")
+    save_state(room, "ai_chat", enabled=True, config={"provider_id": str(provider.id), "model": "x", "persona": ""})
     cfg = _resolve(db, channel).config
     assert (cfg.api_base, cfg.model, cfg.api_key, cfg.persona) == ("https://other.test/v1", "x", "group-key", "租户人格")
 
 
-def test_group_secret_is_encrypted_hidden_and_kept_when_blank() -> None:
+def test_group_stores_only_provider_reference_and_rejects_invalid_selection() -> None:
     db = _session()
     channel = _seed(db)
     room = _room(db, channel)
-    save_from_form(room, "ai_chat", {"enabled": "true", "cfg_api_key": "sk-secret", "cfg_model": "m1"})
-    stored = json.loads(room.extra_json)["group_features"]["ai_chat"]["config"]["api_key"]
-    assert stored and "sk-secret" not in room.extra_json  # 加密保存,明文不落库
-    assert get_override(room).api_key == "sk-secret"
-    # 页面不回显密钥,只提示已配置
-    field = next(f for c in build_feature_cards(room, "wechat_webridge") if c["key"] == "ai_chat" for sec in c["sections"] for f in sec["inputs"] if f["name"] == "cfg_api_key")
-    assert field["value"] == "" and field["configured"] is True
-    # 再次保存时密钥留空 => 保持不变
-    save_from_form(room, "ai_chat", {"enabled": "true", "cfg_model": "m2"})
-    assert get_override(room).api_key == "sk-secret" and get_override(room).model == "m2"
+    provider = add_provider(db)
+    save_from_form(room, "ai_chat", {"enabled": "true", "cfg_provider_id": str(provider.id), "cfg_model": "m1", "cfg_api_key": "must-not-save"})
+    assert get_override(room).provider_id == provider.id
+    assert "api_key" not in room.extra_json and "must-not-save" not in room.extra_json
+    with pytest.raises(ValueError):
+        save_from_form(room, "ai_chat", {"enabled": "true", "cfg_provider_id": "99999", "cfg_model": "m2"})
+    assert get_override(room).model == "m1"
+    provider.enabled = False
+    assert _resolve(db, channel) is None
+    for invalid in ("99999", "broken", "0", "-2", "²", str(2**80)):
+        save_state(room, "ai_chat", enabled=True, config={"provider_id": invalid, "model": "m2"})
+        assert _resolve(db, channel) is None
 
 
 def test_unusable_when_tenant_ai_off_or_model_incomplete() -> None:
@@ -115,11 +119,12 @@ def test_unusable_when_tenant_ai_off_or_model_incomplete() -> None:
     channel = _seed(db)
     room = _room(db, channel)
     save_state(room, "ai_chat", enabled=True)
-    db.query(TenantAiSetting).update({"api_key_encrypted": None})
+    ai_dispatch.get_ai_setting(db).provider.api_key_encrypted = None
     db.commit()
     assert _resolve(db, channel) is None  # 租户没配密钥,群里也没配
-    save_state(room, "ai_chat", enabled=True, config={"api_key": "group-key"})
-    assert _resolve(db, channel) is not None  # 群里补了密钥即可
+    provider = add_provider(db)
+    save_state(room, "ai_chat", enabled=True, config={"provider_id": str(provider.id), "model": "m"})
+    assert _resolve(db, channel) is not None
     db.query(TenantAiSetting).update({"enabled": False})
     db.commit()
     assert _resolve(db, channel) is None  # 租户 AI 总开关关闭

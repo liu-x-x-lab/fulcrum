@@ -19,6 +19,7 @@ from app.web.provider_nodes import router as provider_nodes_router
 from app.web.open_api_apps import router as open_api_apps_router
 from app.web.tenant_auth import router as tenant_auth_router
 from app.web.tenant_admin import router as tenant_admin_router
+from app.web.ai_providers import router as ai_providers_router
 
 __all__ = [
     "group_triggers_router",
@@ -34,5 +35,6 @@ __all__ = [
     "open_api_apps_router",
     "public_site_router",
     "tenant_admin_router",
+    "ai_providers_router",
     "tenant_auth_router",
 ]

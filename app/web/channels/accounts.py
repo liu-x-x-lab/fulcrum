@@ -14,11 +14,8 @@ from app.services.bot_entitlements import BotEntitlementError, get_bot_quota
 from app.services.crud import get_channel
 from app.services.provider_nodes import list_provider_nodes
 from app.services.saas_auth import has_tenant_role
-from app.services.wechat_ipad import (
-    build_wechat_ipad_contact_list,
-    build_wechat_ipad_group_summary,
-    build_wechat_ipad_overview,
-)
+from app.services.wechat_ipad import build_wechat_ipad_overview
+from app.services.account_dashboard import build_account_dashboard
 from app.services.wechat_winauto_chatrooms import build_wechat_winauto_chatroom_list
 from app.services.workwechat_chatrooms import build_workwechat_chatroom_list
 from app.services.workwechat_cloud_poll import load_cloud_poll_config
@@ -29,12 +26,27 @@ from app.web.channels.connections import (
 )
 from app.web.channels.definitions import BUILTIN_CHANNEL_TYPES, CHANNEL_TYPE_FORM_SCHEMA_BY_CODE
 from app.web.channels.views import build_channel_chatroom_summary, build_channel_health_timeline
-from app.web.shared.access import get_session, require_user
+from app.web.shared.access import enforce_role, get_session, require_user
 from app.web.shared.presentation import render
 from app.web.shared.queries import build_bot_name_map
 
 
 router = APIRouter()
+
+
+@router.get("/channels/{channel_id}/wechat-ipad", response_class=HTMLResponse)
+def ipad_account_dashboard(request: Request, channel_id: int, tab: str = "contacts", keyword: str = "",
+                           page: int = 1, conversation_id: int = 0, sender: str = ""):
+    user = enforce_role(request, "readonly")
+    with get_session() as db:
+        channel = get_channel(db, channel_id)
+        if not channel or channel.channel_type != "wechat_ipad" or channel.tenant_id != user.tenant_id:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        return render(request, "wechat_ipad_dashboard.html", page_title=f"iPad 后台 · {channel.name}", channel=channel,
+                      overview=build_wechat_ipad_overview(channel), can_edit=has_tenant_role(user, "operator"),
+                      dashboard=build_account_dashboard(db, channel, tab=tab, keyword=keyword, page=page,
+                                                        conversation_id=conversation_id, sender=sender),
+                      notice=request.query_params.get("notice", ""))
 
 
 @router.get("/channels", response_class=HTMLResponse)
@@ -134,7 +146,6 @@ async def channel_detail_page(request: Request, channel_id: int):
             "bot_token": bool(channel.bot_token_encrypted),
             "adapter_config": bool(channel.adapter_config_json),
         }
-        wechat_ipad_group_summary = build_wechat_ipad_group_summary(db, channel) if channel.channel_type == "wechat_ipad" else None
         channel_chatroom_summary = None
         if channel.channel_type == "wechat_winauto":
             # 渠道详情页只读取本地轻量群视图；主动刷新仍由页面按钮触发，避免打开详情页时阻塞。
@@ -145,7 +156,6 @@ async def channel_detail_page(request: Request, channel_id: int):
         # WeBridge 的群组信息统一放在微桥后台，账号详情页不再重复展示群聊概览卡片。
         workwechat_contact_summary = build_workwechat_contact_summary(db, channel) if channel.channel_type == "workwechat" else None
         # 企微云端拉取配置只在渠道详情页展示摘要；授权码明文不落库，生成后只通过一次性提示展示。
-        wechat_ipad_contact_list = build_wechat_ipad_contact_list(channel) if channel.channel_type == "wechat_ipad" else None
         return render(
             request,
             "channel_detail.html",
@@ -170,12 +180,10 @@ async def channel_detail_page(request: Request, channel_id: int):
             token_preview=channel.bot_token_masked or "-",
             health_checks=health_checks,
             channel_health_timeline=build_channel_health_timeline(db, channel.id),
-            wechat_ipad_overview=build_wechat_ipad_overview(channel, group_summary=wechat_ipad_group_summary) if channel.channel_type == "wechat_ipad" else None,
-            wechat_ipad_group_summary=wechat_ipad_group_summary,
+            wechat_ipad_overview=build_wechat_ipad_overview(channel) if channel.channel_type == "wechat_ipad" else None,
             channel_chatroom_summary=channel_chatroom_summary,
             workwechat_contact_summary=workwechat_contact_summary,
             workwechat_cloud_poll_config=workwechat_cloud_poll_config,
-            wechat_ipad_contact_list=wechat_ipad_contact_list,
             can_manage_channel=has_tenant_role(require_user(request), "tenant_admin"),
             notice=request.query_params.get("notice", ""),
         )

@@ -37,6 +37,11 @@ VOICE = 'wxid_x: <msg><voicemsg voicelength="11438" length="20098" /></msg>'
 EMOJI = 'wxid_x: <msg><emoji md5="d3a2" len="1195005" type="2" /></msg>'
 RED = 'demo_user_b: <msg><appmsg><des><![CDATA[我给你发了一个红包，赶紧去拆!]]></des><url><![CDATA[https://wxapp.tenpay.com/mmpayhb/wxhb_personalreceive?x=1]]></url><type>2001</type></appmsg></msg>'
 SYSTEM = '<img src="SystemMessages_HongbaoIcon.png"/> 你领取了小明的<_wc_custom_link_ color="#FD9931" href="weixin://x">红包</_wc_custom_link_>'
+ARTICLES = '''<msg><appmsg><type>5</type><title>推送总标题</title><des>领取红包封面的方法</des>
+<url>https://example.test/first</url><mmreader><category>
+<item><title>第一篇文章</title><summary>领取红包封面的方法</summary><url>https://example.test/first</url><cover>https://example.test/first.png</cover></item>
+<item><title>第二篇文章</title><digest>第二篇摘要</digest><url>https://example.test/second</url><cover>https://example.test/second.png</cover></item>
+</category><publisher><nickname>示例公众号</nickname></publisher></mmreader></appmsg></msg>'''
 
 
 # ---------- 解析 ----------
@@ -65,6 +70,41 @@ def test_link_card_keeps_only_safe_urls_and_names_the_source() -> None:
     assert view["url"] == "https://example.com/a?b=1&c=2" and view["source"] == "少数派" and view["desc"].startswith("在 Mac")
     assert mv.describe(LINK.replace("https://example.com/a?b=1&c=2", "javascript:alert(1)"), "link")["url"] == ""
     assert mv.describe(LINK.replace("https://example.com/a?b=1&c=2", "weixin://x"), "link")["url"] == ""
+
+
+def test_articles_keep_every_title_cover_summary_and_link() -> None:
+    view = mv.describe(ARTICLES, "link")
+    assert view["kind"] == "article" and view["source"] == "示例公众号"
+    assert [item["title"] for item in view["articles"]] == ["第一篇文章", "第二篇文章"]
+    assert [item["url"] for item in view["articles"]] == ["https://example.test/first", "https://example.test/second"]
+    assert [item["cover"] for item in view["articles"]] == ["https://example.test/first.png", "https://example.test/second.png"]
+    assert [item["desc"] for item in view["articles"]] == ["领取红包封面的方法", "第二篇摘要"]
+    assert mv.preview(ARTICLES, "link") == "[图文] 第一篇文章"
+
+
+def test_article_missing_or_unsafe_resources_keep_readable_content() -> None:
+    content = ARTICLES.replace("https://example.test/first.png", "javascript:alert(1)").replace("https://example.test/second", "data:text/html,unsafe")
+    view = mv.describe(content, "official_account")
+    assert view["articles"][0]["cover"] == ""
+    assert view["articles"][1]["url"] == view["articles"][1]["cover"] == ""
+    assert view["articles"][1]["title"] == "第二篇文章"
+    empty = '<msg><appmsg><type>5</type><title>普通分享</title><mmreader><category/></mmreader></appmsg></msg>'
+    assert mv.describe(empty, "link")["kind"] == "link"
+
+
+@pytest.mark.parametrize("cover", ["", "https://[invalid", "https:///missing-host", "data:image/png;base64,AAAA"])
+def test_single_article_with_bad_cover_still_has_title_and_link(cover) -> None:
+    content = f'<msg><appmsg><type>5</type><mmreader><category><item><title>文章</title><url>https://example.test/read</url><cover>{cover}</cover></item></category></mmreader></appmsg></msg>'
+    view = mv.describe(content, "link")
+    assert view["kind"] == "article" and len(view["articles"]) == 1
+    assert view["articles"][0] == {"title": "文章", "desc": "", "url": "https://example.test/read", "cover": ""}
+
+
+def test_red_packet_wording_does_not_change_link_type_and_thumbnail_is_preserved() -> None:
+    content = LINK.replace("在 Mac 编译 Apple TV 上的游戏", "红包封面的设计").replace("</appmsg>", "<thumburl>https://example.test/cover.png</thumburl></appmsg>")
+    view = mv.describe(content, "link")
+    assert view["kind"] == "link" and view["cover"] == "https://example.test/cover.png"
+    assert mv.describe(RED, "app_unknown")["kind"] == "notice"
 
 
 @pytest.mark.parametrize(
@@ -199,6 +239,26 @@ def test_conversation_list_preview_uses_short_labels(conversation_page) -> None:
     assert preview == "[图片]"
 
 
+def test_article_cards_render_in_initial_and_history_pages(conversation_page) -> None:
+    # 使用虚构的多图文与恶意标题，首屏和增量历史必须共享安全的展示规则。
+    client, ids, conversation_id, _rows, _channel_id = conversation_page
+    content = ARTICLES.replace("第二篇文章", "&lt;script&gt;alert(1)&lt;/script&gt;")
+    with ids["factory"]() as db:
+        message = Message(tenant_id=ids["alpha"], conversation_id=conversation_id, direction="in", sender_id="gh_demo", content=content, message_type="link", status="received")
+        db.add(message)
+        db.commit()
+        message_id = message.id
+    _login(client, "admin")
+    for html in (client.get(f"/messages?conversation_id={conversation_id}").text,
+                 client.get(f"/messages/history?conversation_id={conversation_id}").json()["html"]):
+        row = _row(html, message_id)
+        assert 'class="msg-articles"' in row
+        assert 'href="https://example.test/first"' in row and 'href="https://example.test/second"' in row
+        assert row.count('data-card-cover') == 2 and row.count('loading="lazy"') == 2
+        assert 'referrerpolicy="no-referrer"' in row and "示例公众号" in row
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in row and "<script>alert(1)</script>" not in row
+
+
 # ---------- 点击才加载:服务层 ----------
 
 @pytest.fixture()
@@ -277,7 +337,7 @@ def test_unsupported_channels_and_messages_without_a_wechat_id_fail_with_a_reaso
     message.external_message_id = None
     assert "缺少微信消息编号" in message_media.request(db, message)["error"]
     message.external_message_id = "wx1"
-    channel.channel_type = "wechat_ipad"
+    channel.channel_type = "telegram"
     assert "暂不支持" in message_media.request(db, message)["error"] and _uploads(db) == []
     text = Message(tenant_id=1, conversation_id=3, direction="in", content="文字", message_type="text")
     db.add(text)

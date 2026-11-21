@@ -147,6 +147,14 @@ Authority comes from context, never payload. Custom matchers instead receive
 `DirectoryPluginContext`, including message properties and `binding_config`;
 read its actual definition before using fields.
 
+For iPad group membership notifications, match `group_member_join` or
+`group_member_leave` in `capability.message_types`. Read
+`context.normalized_event["details"]["member_change"]` in a directory matcher:
+`change_type` is `join`, `left` or `removed`, and `members` contains
+`external_id` and `display_name` for the affected members. A roster refresh
+does not replay these events. Built-in welcome cards use per-group settings
+and do not require a plugin.
+
 ```python
 from app.services.plugin_runtime.contracts import PluginExecutionResult
 from app.services.plugin_runtime.replies import text_reply
@@ -168,7 +176,7 @@ def execute_action(request):
 
 Use `output["reply_text"]` or `output["replies"]`. Helpers in
 [`replies.py`](../app/services/plugin_runtime/replies.py) include `text_reply`,
-`image_reply`, `file_reply`, `link_reply`, `video_reply` and `music_reply`.
+`image_reply`, `emoji_reply`, `file_reply`, `link_reply`, `video_reply` and `music_reply`.
 Top-level `message` is execution feedback, not a chat reply. Let the platform
 choose channel delivery; do not construct protocol XML or call channel clients.
 Distinguish missing context/configuration, invalid input, empty results,
@@ -300,11 +308,25 @@ Scheduled context identifies tenant, binding and bot, usually no conversation.
 Group-level overrides of schedule fields produce additional jobs tagged with
 `conversation_id`; the binding-level job still runs. A scheduled plugin must skip
 groups that own a schedule override in its global run and deduplicate per group.
+For a due group override, the scheduler creates a missing group conversation only
+after checking the managed room and its channel ownership and availability.
+Disabled schedules and scans outside the due window do not create conversations.
+An already-completed daily action must report a skip and preserve its game cursor.
 Resolve owned targets and check binding/bot/channel availability, enabled groups
 and current plugin scope before calling `enqueue_outbound_job` with `plugin_code`.
 Use `high_side_effect = true` for sends/external changes and avoid automatic
 replay of uncertain side effects. The template demonstrates scheduling; queuing
 is not proof of external receipt. Self-sent inbound messages remain archive-only.
+
+### iPad group replies
+
+For an iPad group text event, a plugin can return
+`output={"reply_text": "Noted", "reply_mode": "quote"}`. The platform resolves
+the triggering text from the same account and conversation and sends a native
+quote. Plain replies remain the default. `mention` addresses the sender;
+combining a native iPad quote and mention is unsupported. Missing native
+message IDs are a delivery error, not a reason to silently send plain text.
+Group mention matching uses the protocol's mention list, not display names.
 
 ### Automatic reply recall
 
@@ -323,7 +345,11 @@ cannot override it.
 
 Countdowns start only after a successful send receipt with a native message ID.
 Failed sends, missing IDs and unsupported channels do not start one. Current
-adapters support WeBridge and Guga Agent subject to device capabilities; only a
+adapters support WeBridge and Guga Agent subject to device capabilities. iPad
+also supports ordinary outbound text with a complete, matching native send
+receipt. Media, quoted replies and phone-originated echoes are not eligible on
+iPad. Manual and automatic iPad recall share a single request per message;
+timeouts preserve the original content and are not replayed. Only a
 confirmed recall marks the message recalled. Countdowns live in process memory,
 are lost on restart and are not shared across replicas. Implementation details
 belong in [`plugin_auto_revoke.py`](../app/services/plugin_auto_revoke.py).
@@ -358,6 +384,21 @@ the prior package, retaining up to ten versions for rollback. Package rollback
 does not undo business data, migrations or external effects. Verify actual reload
 behavior when helper modules change; do not assume entry-file reload refreshes all
 Python imports.
+
+Platform administrators can uninstall a plugin from its card after confirmation.
+The complete directory moves into `plugins/_uninstalled/<code>/<unique-id>/`,
+outside plugin discovery, and the plugin becomes disabled. Bindings, encrypted
+settings, state, grants and historical records remain intact. If the database
+commit fails, the operation restores the original directory. Keep recovery copies
+private; they may contain operator resources and are not public plugin packages.
+
+Uninstalled plugins disappear from the catalog. Opening or manually refreshing
+the platform page rescans directories, so packages removed directly on the server
+also disappear; the page does not poll or refresh automatically. Uploading the same
+code reuses retained data; a plugin disabled by uninstall requires explicit enablement.
+To recover plugin-local files, an operator can restore them from the preserved
+directory. Uninstall blocks subsequent dispatch and queued delivery, but cannot
+interrupt Python code or external requests already executing.
 
 Use [the testing guide](../tests/README.md) and
 [`test_plugin_template.py`](../tests/test_plugin_template.py). Check the main action,

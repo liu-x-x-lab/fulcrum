@@ -58,8 +58,7 @@ def capabilities(channel: Channel | None, conversation: Conversation | None = No
     elif kind in {"workwechat", "wechat_winauto"}:
         result.update(image=True, file=True)
     elif kind == "wechat_ipad":
-        # 普通文件/视频上传没有协议需要的 CDN XML/封面，不能宣称可直接发送。
-        result.update(image=True, voice=True, mention=True)
+        result.update(image=True, voice=True, video=True, emoji=True, file=True, mention=True, quote=True, revoke=True)
     elif kind == "wechat_gugatool":
         # 手机注册时上报实际支持的命令；老版本没有清单时按适配器已实现的发送能力放行。
         reported = object_json(channel.runtime_info_json).get("guga_agent", {})
@@ -183,6 +182,11 @@ def quote_payload_for(db: Session, channel: Channel, message: Message) -> dict[s
 
     if message.status in {"failed", "revoked"} or message.external_status == "pending":
         raise ValueError("这条消息尚未确认发送、已撤回或缺少渠道消息编号，无法引用")
+    if channel.channel_type == "wechat_ipad":
+        from app.services.wechat_ipad.quotes import reference_fields
+
+        reference_fields(channel, message.conversation, message)
+        return {"reply_to_id": message.id}
     external_id = str(message.external_message_id or "").strip()
     if channel.channel_type == "wechat_gugatool":
         ids = guga_message_ids(db, channel, message)
@@ -213,7 +217,14 @@ def revoke_info(message: Message, channel: Channel | None) -> dict[str, Any]:
     saved = saved if isinstance(saved, dict) else {}
     state = "revoked" if message.status == "revoked" else str(saved.get("state") or "")
     until = 0
-    if is_own_message(message, channel) and message.external_message_id and message.created_at and message.status not in {"failed", "revoked"} and message.external_status != "pending":
+    if channel is not None and channel.channel_type == "wechat_ipad":
+        from app.services.wechat_ipad.recall import recall_params
+
+        if not state and message.direction == "out" and message.status == "sent":
+            params = recall_params(channel, message.conversation, message)
+            if params:
+                until = (params["create_time"] + REVOKE_SECONDS) * 1000
+    elif is_own_message(message, channel) and message.external_message_id and message.created_at and message.status not in {"failed", "revoked"} and message.external_status != "pending":
         until = int((message_sent_at(message) + timedelta(seconds=REVOKE_SECONDS)).timestamp() * 1000)
     return {"revoke_until": until, "revoke_state": state, "revoke_error": str(saved.get("error") or "")}
 
@@ -223,6 +234,10 @@ def request_revoke(db: Session, channel: Channel, conversation: Conversation, me
     # 读到 pending 状态直接返回,不会再入队第二条撤回命令。项目会话关闭了 autoflush,
     # 刷新前必须先 flush,否则会用数据库旧值冲掉本事务里还没写入的修改。
     db.flush()
+    if channel.channel_type == "wechat_ipad":
+        from app.services.wechat_ipad.recall import enqueue
+
+        return enqueue(db, channel, conversation, message, REVOKE_SECONDS)
     db.refresh(message, with_for_update=True)
     if message.conversation_id != conversation.id:
         raise ValueError("消息不属于当前会话")

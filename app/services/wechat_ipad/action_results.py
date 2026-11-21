@@ -11,9 +11,6 @@ def _detect_wechat_ipad_action_missing_field(action: str, kwargs: dict[str, Any]
     required_fields = {
         "get_contact_detail": ("to_wxids",),
         "get_chatroom_qrcode": ("chatroom_id",),
-        "get_chatroom_announce": ("chatroom_id",),
-        "invite_chatroom_member": ("chatroom_id", "to_wxids"),
-        "accept_friend": ("scene", "v1", "v2"),
         "download_image": ("file_aes_key", "file_no"),
         "download_voice": ("msg_id", "from_user_name", "bufid", "length"),
         "download_video": ("msg_id", "to_wxid", "data_len", "section_length"),

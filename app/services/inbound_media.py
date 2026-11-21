@@ -12,8 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.core.settings import settings
 from app.models.entities import Channel, MessageAttachment, TaskJob
+from app.services import media_storage
 from app.services.channel_adapters.workwechat import WorkWechatAdapter
 from app.services.task_queue import WORKWECHAT_CLOUD_CONTROL_JOB, enqueue_job
+from app.services.media_formats import identify
 from app.services.wechat_ipad.client import WechatIpadApiClient
 from app.services.workwechat_cloud_poll import is_cloud_poll_enabled, notify_cloud_job_enqueued
 
@@ -76,6 +78,8 @@ def download_wechat_image_attachment(
     attachment: MessageAttachment,
     channel: Channel,
 ) -> dict[str, Any]:
+    if attachment.channel_id != channel.id or attachment.tenant_id != channel.tenant_id:
+        raise ValueError("attachment_channel_mismatch")
     metadata = _parse_json(attachment.metadata_json)
     adapter_config = _parse_json(channel.adapter_config_json)
     wxid = str(adapter_config.get("wxid") or "").strip()
@@ -99,8 +103,8 @@ def download_wechat_image_attachment(
         raise ValueError("wechat_ipad_image_content_empty")
 
     storage_path = _build_attachment_path(channel.id, attachment.id, resolved["extension"])
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    storage_path.write_bytes(content)
+    media_storage.write(storage_path, content, tenant_id=attachment.tenant_id,
+        boundary=Path(settings.data_dir) / "inbound_media" / f"channel_{attachment.channel_id}")
 
     attachment.status = "downloaded"
     attachment.storage_path = str(storage_path)
@@ -163,32 +167,22 @@ def store_uploaded_media_attachment(
 
     if not content:
         raise ValueError("webridge_uploaded_media_empty")
-    suffix = Path(filename or "").suffix or _extension_for_mime(content_type)
+    mime_type, suffix = identify(content, content_type, filename)
+    original_suffix = Path(filename or "").suffix
+    if suffix == ".bin" and 1 < len(original_suffix) <= 12 and original_suffix[1:].isalnum():
+        suffix = original_suffix.lower()
     storage_path = _build_attachment_path(attachment.channel_id, attachment.id, suffix)
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    storage_path.write_bytes(content)
+    media_storage.write(storage_path, content, tenant_id=attachment.tenant_id,
+        boundary=Path(settings.data_dir) / "inbound_media" / f"channel_{attachment.channel_id}")
     attachment.status = "downloaded"
     attachment.storage_path = str(storage_path)
     attachment.file_size = len(content)
-    attachment.mime_type = content_type or "application/octet-stream"
+    attachment.mime_type = mime_type
     attachment.last_error = None
     metadata = _parse_json(attachment.metadata_json)
     attachment.metadata_json = json.dumps({**metadata, "uploaded_by": "wechat_webridge", "file_name": filename or None}, ensure_ascii=False, sort_keys=True)
     db.flush()
     return {"attachment_id": int(attachment.id), "storage_path": str(storage_path), "file_size": len(content), "mime_type": attachment.mime_type}
-
-
-def _extension_for_mime(content_type: str) -> str:
-    """为没有文件名的上传提供保守扩展名，避免把媒体保存成无后缀临时文件。"""
-
-    return {
-        "image/jpeg": ".jpg",
-        "image/png": ".png",
-        "image/gif": ".gif",
-        "audio/mpeg": ".mp3",
-        "audio/amr": ".amr",
-        "video/mp4": ".mp4",
-    }.get(str(content_type or "").lower(), ".bin")
 
 
 def _download_workwechat_file_attachment(db: Session, *, attachment: MessageAttachment, channel: Channel) -> dict[str, Any]:
@@ -512,12 +506,13 @@ def _persist_attachment_content(
     content = resolved["content"]
     if not content:
         raise ValueError("wechat_ipad_attachment_content_empty")
-    storage_path = _build_attachment_path(attachment.channel_id, attachment.id, resolved["extension"])
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    storage_path.write_bytes(content)
+    mime_type, extension = identify(content, resolved["mime_type"], "media" + resolved["extension"])
+    storage_path = _build_attachment_path(attachment.channel_id, attachment.id, extension)
+    media_storage.write(storage_path, content, tenant_id=attachment.tenant_id,
+        boundary=Path(settings.data_dir) / "inbound_media" / f"channel_{attachment.channel_id}")
     attachment.status = "downloaded"
     attachment.storage_path = str(storage_path)
-    attachment.mime_type = resolved["mime_type"]
+    attachment.mime_type = mime_type
     attachment.file_size = len(content)
     attachment.last_error = None
     attachment.metadata_json = json.dumps(
@@ -593,22 +588,7 @@ def _build_attachment_path(channel_id: int, attachment_id: int, extension: str) 
 
 
 def _guess_extension(mime_type: str, content: bytes) -> str:
-    normalized = str(mime_type or "").strip().lower()
-    if normalized == "image/png":
-        return ".png"
-    if normalized == "image/webp":
-        return ".webp"
-    if normalized == "image/gif":
-        return ".gif"
-    if normalized == "image/bmp":
-        return ".bmp"
-    if content.startswith(b"\x89PNG"):
-        return ".png"
-    if content.startswith(b"GIF87a") or content.startswith(b"GIF89a"):
-        return ".gif"
-    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
-        return ".webp"
-    return ".jpg"
+    return identify(content, mime_type)[1]
 
 
 def _parse_json(raw: str | None) -> dict[str, Any]:

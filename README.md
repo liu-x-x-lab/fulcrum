@@ -282,7 +282,7 @@ DATABASE_URL=sqlite:///./data/app.db
 如果消息规模会到几十万甚至更多，生产环境更建议使用 MariaDB：
 
 ```env
-DATABASE_URL=mysql+pymysql://multi_bot_saas:change-this-password@127.0.0.1:3306/multi_bot_saas?charset=utf8mb4
+DATABASE_URL=mysql+pymysql://fulcrum:change-this-password@127.0.0.1:3306/fulcrum?charset=utf8mb4
 DATABASE_POOL_SIZE=10
 DATABASE_MAX_OVERFLOW=20
 DATABASE_POOL_RECYCLE_SECONDS=1800
@@ -538,8 +538,9 @@ APP_ENV=test DATA_DIR="$PWD/.run/t" DATABASE_URL="sqlite:///$PWD/.run/t/test.db"
 
 ## License
 
-本项目以 [Apache License 2.0](LICENSE) 发布。第三方依赖遵循各自的许可证；
-可选依赖见 [requirements-optional.txt](requirements-optional.txt)（例如 `pysilk` 未声明许可证，使用前请自行确认）。
+This project is released under the [Apache License 2.0](LICENSE). Third-party
+dependencies retain their own licenses. Built-in SILK audio uses `silk-python`
+(BSD); see [Media library](docs/media-library.md) for playback and upgrade notes.
 
 微信/企业微信 Hook、iPad 协议等 provider 客户端依赖第三方组件，**不随本仓库发布**；使用这类非官方接口可能违反
 相关平台的服务条款，请自行评估风险并遵守适用的法律法规。

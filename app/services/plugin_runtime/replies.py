@@ -13,7 +13,13 @@ MAX_VIDEO_BASE64_LENGTH = 40 * 1024 * 1024
 MAX_FILE_NAME_LENGTH = 255
 MAX_LINK_TITLE_LENGTH = 200
 MAX_LINK_DESCRIPTION_LENGTH = 1_000
-ALLOWED_REPLY_TYPES = {"text", "image", "file", "video", "link", "music"}
+ALLOWED_REPLY_TYPES = {"text", "image", "emoji", "file", "video", "link", "music"}
+
+
+def emoji_reply(*, base64_data: str) -> dict[str, str]:
+    """返回原始表情字节，渠道自行选择文件地址或直接上传。"""
+    return {"type": "emoji", "emoji_base64": _validate_base64(
+        base64_data, max_length=4 * ((8 * 1024 * 1024 + 2) // 3), label="表情")}
 
 
 class PluginReplyError(ValueError):
@@ -203,6 +209,8 @@ def standard_replies(
                     allowed_root=allowed_root,
                 )
             )
+        elif reply_type == "emoji":
+            normalized.append(emoji_reply(base64_data=item.get("emoji_base64") or ""))
         elif reply_type == "file":
             normalized.append(
                 file_reply(

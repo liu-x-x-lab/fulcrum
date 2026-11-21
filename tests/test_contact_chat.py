@@ -1,12 +1,13 @@
 """好友发起私聊的跨渠道入口及真实认证边界；创建会话不会发送消息。"""
 
 from dataclasses import replace
+from urllib.parse import parse_qs, urlsplit
 
 from sqlalchemy import func, select
 
 import app.services.channel_adapters as channel_adapters
 from app.core.time import now_shanghai
-from app.models.entities import Bot, Channel, Conversation, Message, TaskJob, WorkWechatContact
+from app.models.entities import Bot, Channel, Conversation, IpadFriend, Message, TaskJob, WorkWechatContact
 from app.services import channel_catalog
 from test_provider_node_pages import _login, provider_page_context  # noqa: F401
 
@@ -31,8 +32,16 @@ def test_all_current_channels_create_and_reuse_direct_chat(provider_page_context
                 channel_type=channel_type, is_enabled=True)
             db.add(channel)
             db.flush()
-            contact = _friend(db, ids, channel_id=channel.id)
-            channel_id, contact_id = channel.id, contact.id
+            if channel_type == "wechat_ipad":
+                channel.runtime_info_json = '{"active_wxid":"owner"}'
+                contact = IpadFriend(tenant_id=ids["alpha"], channel_id=channel.id, owner_wxid="owner",
+                                     contact_external_id="new-friend", display_name="新好友")
+                db.add(contact)
+                db.flush()
+                contact_id = f"ipad-{contact.id}"
+            else:
+                contact_id = _friend(db, ids, channel_id=channel.id).id
+            channel_id = channel.id
             db.commit()
         page = client.get(f"/contacts?channel_id={channel_id}")
         assert page.status_code == 200 and f'action="/contacts/{contact_id}/chat"' in page.text
@@ -56,6 +65,7 @@ def test_contact_chat_enforces_tenant_role_csrf_and_lifecycle(provider_page_cont
     client, ids = provider_page_context
     csrf = _login(client, "operator")
     with ids["factory"]() as db:
+        db.get(Channel, ids["channel_id"]).channel_type = "wechat_webridge"
         contact = _friend(db, ids)
         foreign_bot = Bot(tenant_id=ids["beta"], name="其他企业机器人")
         db.add(foreign_bot)
@@ -122,3 +132,61 @@ def test_direct_chat_uses_catalog_capability_and_never_reuses_a_group(provider_p
     monkeypatch.setitem(channel_catalog._CHANNEL_TYPE_BY_CODE, original.code, original)
     response = client.post(f"/contacts/{contact_id}/chat", data={"csrf_token": csrf})
     assert response.status_code == 303 and f"conversation_id={group_id}&" not in response.headers["location"]
+
+
+def test_ipad_first_chat_uses_bound_friend_from_either_directory(provider_page_context):
+    client, ids = provider_page_context
+    cid = ids["channel_id"]
+    with ids["factory"]() as db:
+        db.get(Channel, cid).adapter_config_json = '{"wxid":"owner"}'
+        other = Channel(tenant_id=ids["alpha"], bot_id=ids["bot"], name="微桥", channel_type="wechat_webridge")
+        db.add(other)
+        db.flush()
+        same_key = _friend(db, ids, channel_id=other.id, external_id="regular-peer")
+        db.add_all([
+            IpadFriend(id=same_key.id, tenant_id=ids["alpha"], channel_id=cid, owner_wxid="owner",
+                       contact_external_id="ipad-peer", display_name="新好友 iPad", alias="alias_ipad"),
+            IpadFriend(tenant_id=ids["alpha"], channel_id=cid, owner_wxid="previous",
+                       contact_external_id="old-peer", display_name="过期好友"),
+            Conversation(tenant_id=ids["alpha"], bot_id=ids["bot"], channel_id=cid, channel_type="wechat_ipad",
+                         external_id="ipad-peer", chat_type="group"),
+        ])
+        # 前 30 位来自两个协议，校验跨表排序后再分页。
+        for i in range(30):
+            db.add(IpadFriend(tenant_id=ids["alpha"], channel_id=cid, owner_wxid="owner",
+                              contact_external_id=f"before-{i}", display_name=f"A新好友{i:02d}"))
+        key, bridge = same_key.id, other.id
+        db.commit()
+    action = f"/contacts/ipad-{key}/chat"
+    regular = f"/contacts/{key}/chat"
+    source = "/contacts?q=%E6%96%B0%E5%A5%BD%E5%8F%8B&page=2"
+    dashboard = f"/channels/{cid}/wechat-ipad?tab=contacts&keyword=alias_ipad"
+    csrf = _login(client, "operator")
+    for path in (source, dashboard):
+        body = client.get(path).text
+        assert f'action="{action}"' in body and "新好友 iPad" in body
+    assert f'action="{regular}"' in client.get(source).text
+    assert f'action="{regular}"' in client.get(f"/channels/{bridge}/wechat-webridge").text
+    assert "没有匹配的好友。" in client.get("/contacts?q=过期好友").text
+    assert client.post(action, data={"csrf_token": "bad"}).status_code == 403
+    conversation_id = None
+    for path in (source, dashboard):
+        redirected = client.post(action, data={"csrf_token": csrf, "return_to": path})
+        assert redirected.status_code == 303
+        query = parse_qs(urlsplit(redirected.headers["location"]).query)
+        assert query["return_to"] == [path] and query["channel_id"] == [str(cid)]
+        if conversation_id:
+            assert conversation_id == query["conversation_id"][0]
+        conversation_id = query["conversation_id"][0]
+        assert client.get(redirected.headers["location"]).status_code == 200
+        assert f'action="{action}"' not in client.get(path).text
+    with ids["factory"]() as db:
+        row = db.get(Conversation, int(conversation_id))
+        assert (row.chat_type, row.channel_id, row.external_id) == ("direct", cid, "ipad-peer")
+        assert db.scalar(select(func.count(Message.id))) == db.scalar(select(func.count(TaskJob.id))) == 0
+        db.get(Channel, cid).runtime_info_json = '{"active_wxid":"replacement"}'
+        db.commit()
+    assert "新好友 iPad" not in client.get(source).text
+    assert client.post(action, data={"csrf_token": csrf}).status_code == 404
+    readonly = _login(client, "readonly")
+    assert client.post(action, data={"csrf_token": readonly}).status_code == 403

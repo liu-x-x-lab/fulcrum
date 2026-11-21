@@ -134,7 +134,8 @@ class PluginHttpClient:
         normalized_url = validate_http_url(url)
         normalized_headers = {str(key): str(value) for key, value in dict(headers or {}).items()}
         encoded_body = _encode_request_body(body=body, json_body=json_body, headers=normalized_headers)
-        connect_timeout = _bounded_float(connect_timeout_seconds, minimum=0.1, maximum=60.0)
+        # urllib 的 open 超时也覆盖等待响应头；非流式绘图不能被隐式截成 60 秒。
+        connect_timeout = _bounded_float(connect_timeout_seconds, minimum=0.1, maximum=300.0)
         total_timeout = _bounded_float(total_timeout_seconds, minimum=0.1, maximum=300.0)
         response_limit = max(1, min(int(max_response_bytes), MAX_RESPONSE_BYTES))
         redirect_limit = max(0, min(int(max_redirects), MAX_REDIRECTS))

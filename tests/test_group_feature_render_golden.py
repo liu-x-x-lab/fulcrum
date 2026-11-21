@@ -3,7 +3,7 @@
 群功能和插件配置共用声明式字段。本基准记录当前弹性布局及字段保存契约；
 有意调整布局时同步更新基准，不保留对已替换的单行铺满布局的输出约束。
 
-基准覆盖:每个已注册的群功能各取一个状态(开/关交替)、输入项取非默认值、密钥项已保存(页面只显示"已配置")。
+基准覆盖:每个已注册群功能各取一个状态(开/关交替)，输入项取非默认值；AI 只选择供应商，不显示密钥。
 比较前先做规整:去掉 CSRF 令牌、把空白折叠,所以缩进和换行的变化不算差异,标签、属性、文字的任何变化都算。
 
 需要有意更新基准时:UPDATE_GOLDEN=1 python -m pytest tests/test_group_feature_render_golden.py
@@ -104,16 +104,32 @@ def test_group_feature_tab_matches_the_golden_render(feature_page) -> None:
 
 
 def test_the_golden_covers_every_kind_of_field_and_state() -> None:
-    """基准覆盖开关、文本、数字、密钥、下拉及开启/关闭状态，避免空壳对比。"""
+    """基准覆盖开关、文本、数字、模型选择与状态；密钥表单由供应商测试覆盖。"""
 
     text = GOLDEN.read_text(encoding="utf-8") if GOLDEN.exists() else ""
     if not text:
         pytest.skip("基准文件尚未生成")
-    assert 'role="switch"' in text and 'type="number"' in text and 'type="password"' in text and 'type="text"' in text
+    assert 'role="switch"' in text and 'type="number"' in text and 'type="text"' in text
+    assert 'data-ai-model-picker' in text and 'name="cfg_api_key"' not in text
     assert '<textarea name="cfg_join_template" rows="4" maxlength="2000">' in text
-    assert "已配置，留空则保持不变" in text and " is-on" in text and "data-gf-depends" in text
+    assert " is-on" in text and "data-gf-depends" in text
     assert '<select name="cfg_card_thumb_source">' in text
     assert '<option value="member_avatar" selected>新成员头像</option>' in text
+
+
+def test_moderation_form_validation_retains_previous_settings(feature_page):
+    client, channel_id, room_id = feature_page
+    csrf = _login(client, "admin")
+    url = f"/channels/{channel_id}/chatrooms/{room_id}/features/moderation"
+    headers = {"X-CSRF-Token": csrf, "X-Requested-With": "fetch"}
+    good = {"enabled": "true", "cfg_words": "测试词\n第二词", "cfg_mode": "warn",
+            "cfg_window_hours": "24", "cfg_warning_text": "{member} {count}"}
+    assert client.post(url, data=good, headers=headers).status_code == 200
+    bad = client.post(url, data={**good, "cfg_warning_text": "{unsupported}"}, headers=headers)
+    assert bad.status_code == 400 and bad.json()["ok"] is False
+    html = client.get(f"/channels/{channel_id}/chatrooms/{room_id}?tab=features").text
+    assert "测试词\n第二词" in html and "{member} {count}" in html
+    assert "最近治理记录" in html and "暂无违规记录" in html
 
 
 @pytest.mark.parametrize("first_source", ["member_avatar", "url"])

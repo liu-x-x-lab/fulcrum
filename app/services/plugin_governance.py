@@ -76,14 +76,14 @@ def _current_plan_id(db: Session, tenant_id: int) -> int | None:
 
 
 def blocked_plugin_codes(db: Session, tenant_id: int) -> frozenset[str]:
-    """这个租户当前不能使用的插件编码:被平台停用的、对它不可见的。
+    """这个租户当前不能使用的插件编码：被平台停用、目录缺失或对它不可见。
 
     绝大多数情况下没有任何受限插件,此时只有一次很轻的查询;租户的套餐只有存在"指定套餐"的插件时才会去查。
     """
 
     restricted = db.execute(
-        select(Plugin.id, Plugin.code, Plugin.platform_status, Plugin.visibility).where(
-            or_(Plugin.platform_status != STATUS_ACTIVE, Plugin.visibility != VISIBILITY_ALL)
+        select(Plugin.id, Plugin.code, Plugin.platform_status, Plugin.visibility, Plugin.missing_at).where(
+            or_(Plugin.platform_status != STATUS_ACTIVE, Plugin.visibility != VISIBILITY_ALL, Plugin.missing_at.is_not(None))
         )
     ).all()
     if not restricted:
@@ -97,7 +97,8 @@ def blocked_plugin_codes(db: Session, tenant_id: int) -> frozenset[str]:
     return frozenset(
         row.code
         for row in restricted
-        if not is_available(
+        # 手动删除目录后即使旧开关还是启用，刷新标记缺失后也不能继续调度。
+        if row.missing_at is not None or not is_available(
             platform_status=row.platform_status,
             visibility=row.visibility,
             grants=grants.get(int(row.id), ()),

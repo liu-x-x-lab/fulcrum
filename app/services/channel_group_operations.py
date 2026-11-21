@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.entities import Channel, Chatroom
+from app.models.entities import Channel, Chatroom, ChatroomMember
+from app.core.tenant_context import require_tenant_id
+from app.services.account_identity import account_identity
 from app.services.channel_adapters import get_channel_adapter
 from app.services.plugin_runtime.contracts import PluginExecutionContext
 
@@ -71,3 +74,45 @@ def _error(error_code: str, error_message: str) -> dict[str, object]:
         "error_code": error_code,
         "error_message": error_message,
     }
+
+
+def removal_permission_error(db: Session, channel: Channel, room: Chatroom, member_id: str) -> str:
+    """踢人只使用可信租户与当前群成员身份，后台员工权限不能代替群管理权限。"""
+    if (channel.tenant_id != require_tenant_id() or room.tenant_id != channel.tenant_id
+            or room.channel_id != channel.id or room.bot_id != channel.bot_id):
+        return "群不属于当前账号"
+    if not channel.is_enabled or not room.is_active or room.status == "left" or room.management_status == "archived":
+        return "账号或群已停止管理"
+    own_id = account_identity(channel)["external_id"]
+    if not own_id or member_id == own_id or member_id == room.owner_external_id:
+        return "不能移除机器人自身或群主"
+    members = {row.member_external_id: row for row in db.scalars(select(ChatroomMember).where(
+        ChatroomMember.tenant_id == channel.tenant_id, ChatroomMember.bot_id == channel.bot_id,
+        ChatroomMember.channel_id == channel.id, ChatroomMember.chatroom_id == room.id,
+        ChatroomMember.member_external_id.in_((own_id, member_id)),
+    ).with_for_update().execution_options(populate_existing=True))}
+    own = members.get(own_id)
+    if own is not None and own.status != "active":
+        return "机器人已不在群内"
+    if own_id != room.owner_external_id and not (own and own.role in {"owner", "admin"}):
+        return "尚未确认机器人具有群管理权限，请同步群成员"
+    target = members.get(member_id)
+    if target is None or target.status != "active" or target.role != "member":
+        return "目标不是已确认的普通群成员，请同步群成员"
+    return ""
+
+
+def remove_group_member(db: Session, *, channel: Channel, room: Chatroom, member_id: str, request_id: str) -> dict:
+    """公共成员移除入口，适配器负责渠道协议；入队成功不表示成员已经移出。"""
+    if not request_id or len(request_id) > 128:
+        return {"ok": False, "status": "denied", "error_message": "移出操作需要有效的请求编号"}
+    reason = removal_permission_error(db, channel, room, member_id)
+    if reason:
+        return {"ok": False, "status": "denied", "error_message": reason}
+    if channel.channel_type == "wechat_ipad":
+        from app.services.group_moderation.ipad import enqueue
+
+        return enqueue(db, channel, room, member_id, request_id)
+    return get_channel_adapter(channel).remove_group_member(
+        channel, chatroom_external_id=room.external_id, member_external_id=member_id, request_id=request_id,
+    )

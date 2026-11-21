@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block back %}<a class="page-back" href="{{ back_href }}" aria-label="返回好友列表" title="返回好友列表"><span class="i i-arrow-left" aria-hidden="true"></span></a>{% endblock %}
+{% block content %}
+<section class="work-surface">
+  {% if channels|length > 1 %}<form method="get" class="compact-filter-form">
+    <label class="compact-filter-field">账号<select name="channel_id"><option value="0">全部</option>
+    {% for c in channels %}<option value="{{ c.id }}"{% if channel_id == c.id %} selected{% endif %}>{{ c.name }}</option>{% endfor %}
+    </select></label><input type="hidden" name="return_to" value="{{ back_href }}"><button class="btn" type="submit">筛选</button>
+  </form>{% endif %}
+  {% if rows %}<div class="table-scroll"><table class="table"><thead><tr><th>申请人</th><th>账号</th><th>收到时间</th><th>状态</th><th>操作</th></tr></thead><tbody>
+    {% for r in rows %}<tr><td>{{ r.nickname or r.applicant }}{% if r.nickname %}<div class="muted-text">{{ r.applicant }}</div>{% endif %}</td>
+      <td>{{ names[r.channel_id] }}</td><td>{{ r.received_at|bj_time }}</td><td>{{ labels[r.status] }}</td><td>
+      {% if can_edit and r.status == 'pending' and r.channel_id in enabled %}
+      <form method="post" action="/channels/{{ r.channel_id }}/wechat-ipad/requests/{{ r.id }}/accept">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="return_to" value="{{ current_list_url }}">
+      <button class="btn btn-small" type="submit">接受申请</button></form>
+      {% elif r.status in ('submitted', 'unknown') %}<a href="/channels/{{ r.channel_id }}/wechat-ipad?tab=contacts">查看好友</a>{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>{% include '_pager.html' %}
+  {% else %}<p class="muted-text">暂无好友申请。</p>{% endif %}
+</section>
+{% endblock %}

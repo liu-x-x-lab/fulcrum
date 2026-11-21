@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.tenant_context import tenant_scope
 from app.core.tenant_db import tenant_session
+from app.core.time import now_shanghai
 from app.models.entities import (
     Bot,
     BotPlugin,
@@ -106,7 +107,12 @@ def test_targeted_schedule_does_not_create_other_group_conversations(env, monkey
         "_resolve",
         lambda _db, _context, _config: (binding, conversation, channel, {"scheduled_enabled": True}),
     )
-    monkeypatch.setattr(module, "_start", lambda *args, **kwargs: module._result("started", "ok", []))
+    # 保留真实开局和状态写入，只替换出站边界，避免测试把空回复误当作成功发题。
+    from app.core.settings import settings
+
+    monkeypatch.setattr(settings, "public_base_url", "https://example.test")
+    queued = []
+    monkeypatch.setattr(module, "_queue_reply", lambda *args, **kwargs: queued.append(args[-1]))
     request = PluginExecutionRequest(
         action="idiom_daily_start",
         config={"scheduled_enabled": True, "send_time": "20:00"},
@@ -125,4 +131,46 @@ def test_targeted_schedule_does_not_create_other_group_conversations(env, monkey
     db.flush()
 
     assert result.status == "completed"
+    assert len(queued) == 1
     assert [int(item.id) for item in db.scalars(select(Conversation)).all()] == [int(conversation.id)]
+
+
+def test_repeated_daily_start_preserves_cursor_and_reports_skipped(env, monkeypatch) -> None:
+    """当天已开局的群重复执行时不发题、不推进共享游标，也不报告成功开局。"""
+
+    db, channel, conversation = env
+    module = plugin_directory.load_directory_plugin("idiom_guess", force=True).instance._module
+    bot = Bot(tenant_id=1, name="机器人", status="running", is_enabled=True)
+    plugin = Plugin(code="idiom_guess", display_name="看图猜成语", plugin_type="message")
+    db.add_all([bot, plugin])
+    db.flush()
+    binding = BotPlugin(tenant_id=1, bot_id=bot.id, plugin_id=plugin.id, status="enabled", config_json="{}")
+    db.add(binding)
+    db.flush()
+    context = PluginExecutionContext(tenant_id=1, binding_id=binding.id, bot_id=bot.id,
+        channel_id=channel.id, conversation_id=conversation.id, chat_type="group")
+    today = now_shanghai().astimezone(module.BEIJING).date().isoformat()
+    cursor = PluginStateRecord(tenant_id=1, bot_plugin_id=binding.id,
+        namespace=module.CODE, state_key="cursor", payload_json='{"position": 7}')
+    state = PluginStateRecord(tenant_id=1, bot_plugin_id=binding.id, namespace=module.CODE,
+        state_key=module._room_key(channel.id, conversation.external_id),
+        payload_json=json.dumps({"daily_date": today, "status": "active", "position": 6}))
+    db.add_all([cursor, state])
+    db.flush()
+    before_state = state.payload_json
+    monkeypatch.setattr(module, "_resolve", lambda *_: (binding, conversation, channel, {"scheduled_enabled": True}))
+    queued = []
+    monkeypatch.setattr(module, "_queue_reply", lambda *args, **kwargs: queued.append(args[-1]))
+    request = PluginExecutionRequest(action="idiom_daily_start", config={"scheduled_enabled": True},
+        payload={}, context=context)
+
+    result = module.execute_scheduled_action(db, request)
+    db.flush()
+    db.refresh(cursor)
+    db.refresh(state)
+
+    assert json.loads(cursor.payload_json)["position"] == 7
+    assert state.payload_json == before_state
+    assert result.ok and result.status == "skipped"
+    assert result.output["provider_status"] == "already_started"
+    assert queued == []

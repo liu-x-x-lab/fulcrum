@@ -306,7 +306,12 @@ def test_group_invite_operation_dispatches_through_channel_adapter(group_plugin_
     assert rejected["error_code"] == "chatroom_not_found"
 
 
-def test_wechat_ipad_adapter_implements_generic_group_invite(monkeypatch) -> None:
+@pytest.mark.parametrize("case,status", [
+    ("accepted", "sent"), ("rejected", "failed"), ("timeout", "unknown"), ("wrong_member", "unknown"),
+    ("partial", "unknown"), ("per_member_error", "unknown"), ("no_status", "unknown"),
+    ("outer_only", "unknown"), ("comma", "failed"),
+])
+def test_wechat_ipad_adapter_implements_generic_group_invite(monkeypatch, case, status) -> None:
     """iPad 874 协议实现通用群邀请接口，不由插件直接构造协议请求。"""
 
     from app.services.channel_adapters.wechat_ipad import WechatIpadAdapter
@@ -323,7 +328,20 @@ def test_wechat_ipad_adapter_implements_generic_group_invite(monkeypatch) -> Non
                 "to_wxids": to_wxids,
             }
         )
-        return {"Ret": 0, "Msg": "success"}
+        if case == "timeout":
+            raise TimeoutError("private upstream details")
+        members = [{"MemberName": {"string": member}, "MemberStatus": 0} for member in reversed(to_wxids)]
+        if case == "wrong_member":
+            members[0]["MemberName"]["string"] = "other"
+        if case == "partial":
+            members.pop()
+        if case == "per_member_error":
+            members[0]["MemberStatus"] = 1
+        if case == "no_status":
+            del members[0]["MemberStatus"]
+        data = {"baseResponse": {"ret": -1 if case == "rejected" else 0},
+                "MemberCount": len(members), "MemberList": members}
+        return {"http_status": 200, "Success": True, "Code": 0, "Data": {} if case == "outer_only" else data}
 
     monkeypatch.setattr(WechatIpadApiClient, "invite_chatroom_member", fake_invite)
     channel = Channel(
@@ -337,29 +355,32 @@ def test_wechat_ipad_adapter_implements_generic_group_invite(monkeypatch) -> Non
     result = WechatIpadAdapter().invite_group_members(
         channel,
         chatroom_external_id="room@chatroom",
-        member_external_ids=["wxid-user"],
+        member_external_ids=["wxid-user,other"] if case == "comma" else ["wxid-user", "wxid-second"],
     )
 
-    assert result["ok"] is True
+    assert result["ok"] is (status == "sent")
+    assert result["status"] == status
+    assert "raw_response" not in result and "private upstream" not in str(result)
     assert result["action"] == "invite_group_members"
-    assert calls == [
+    assert calls == ([] if case == "comma" else [
         {
             "channel_id": 88,
             "wxid": "wxid-bot",
             "chatroom_id": "room@chatroom",
-            "to_wxids": ["wxid-user"],
+            "to_wxids": ["wxid-user", "wxid-second"],
         }
-    ]
+    ])
 
 
-def test_group_auto_invite_uses_current_commands_and_trusted_user(group_plugin_fixture, monkeypatch) -> None:
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_group_auto_invite_uses_current_commands_and_trusted_user(group_plugin_fixture, monkeypatch, confirmed) -> None:
     """自动拉群使用当前中文命令、内部群映射和通用邀请接口。"""
 
     factory, identity = group_plugin_fixture
     discovered = get_discovered_plugin("group_auto_invite", force=True)
     assert discovered is not None
     assert discovered.matcher.commands == ("加群配置", "加群")
-    assert discovered.capability.channel_types == ("wechat_ipad",)
+    assert "wechat_ipad" in discovered.capability.channel_types
     assert discovered.runtime_config == {
         "admin_user_ids": [],
         "require_direct_chat": True,
@@ -409,7 +430,7 @@ def test_group_auto_invite_uses_current_commands_and_trusted_user(group_plugin_f
                 "member_external_ids": member_external_ids,
             }
         )
-        return {"ok": True, "status": "sent"}
+        return {"ok": confirmed, "status": "sent" if confirmed else "unknown"}
 
     monkeypatch.setattr(module, "invite_group_members", fake_invite)
     user_context = PluginExecutionContext(
@@ -441,9 +462,10 @@ def test_group_auto_invite_uses_current_commands_and_trusted_user(group_plugin_f
                 context=user_context,
             ),
         )
-    assert invited.ok is True
-    assert invited.output["provider_status"] == "invite_sent"
-    assert invited.output["replies"] == [{"type": "text", "content": "群邀请已发送，请在客户端确认。"}]
+    assert invited.ok is confirmed
+    assert invited.output["provider_status"] == ("invite_sent" if confirmed else "invite_unknown")
+    message = "群邀请已发送，请在客户端确认。" if confirmed else "邀请结果待核实，请先查看微信，不要重复邀请。"
+    assert invited.output["replies"] == [{"type": "text", "content": message}]
     assert calls[0]["chatroom_id"] == identity["invite_chatroom_id"]
     assert calls[0]["member_external_ids"] == ["wxid-current-user"]
 
@@ -462,6 +484,32 @@ def test_group_auto_invite_uses_current_commands_and_trusted_user(group_plugin_f
     assert "WechatIpadApiClient" not in source
     assert 'payload.get("sender_id")' not in source
     assert 'payload.get("channel_id")' not in source
+
+
+def test_manual_ipad_invite_records_unknown_without_raw_receipt(group_plugin_fixture, monkeypatch):
+    from app.services.wechat_ipad.client import WechatIpadApiClient
+    from app.services.wechat_ipad.service import run_wechat_ipad_action
+
+    factory, identity = group_plugin_fixture
+    calls = []
+
+    def partial(self, channel, *, wxid, chatroom_id, to_wxids):
+        calls.append((wxid, chatroom_id, to_wxids))
+        return {"http_status": 200, "Success": True, "Code": 0, "Data": {
+            "baseResponse": {"ret": 0}, "MemberCount": 0, "MemberList": [], "unneeded": "private details"}}
+
+    monkeypatch.setattr(WechatIpadApiClient, "invite_chatroom_member", partial)
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        channel = db.get(Channel, identity["invite_channel_id"])
+        channel.api_base = "https://example.test"
+        channel.runtime_info_json = '{"active_wxid":"robot"}'
+        run_wechat_ipad_action(db, channel, action="invite_chatroom_member", params={
+            "chatroom_id": "invite-room@chatroom", "to_wxids": "alice,bob"})
+        state = json.loads(channel.runtime_info_json)
+        assert state["last_action_ok"] is False and state["last_error"] == "result_unknown"
+        assert state["last_action_result_preview"]["status"] == "unknown"
+        assert "private details" not in channel.runtime_info_json
+        assert calls == [("robot", "invite-room@chatroom", ["alice", "bob"])]
 
 
 def test_group_virtual_uses_trusted_groups_and_outbound_queue(group_plugin_fixture) -> None:

@@ -14,6 +14,7 @@ from urllib.parse import quote
 from fastapi import Request
 
 from app.core.settings import settings
+from app.services import media_storage
 
 
 # 所有租户文件统一放在 data/tenants 下，避免不同客户即使渠道编号或随机分享编号
@@ -86,6 +87,7 @@ def store_outbound_upload(
     content: bytes,
     content_type: str | None,
     message_type: str,
+    provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_type = str(message_type or "file").strip().lower() or "file"
     original_name = sanitize_upload_filename(file_name, fallback="upload.bin")
@@ -93,9 +95,9 @@ def store_outbound_upload(
     if int(tenant_id or 0) <= 0:
         raise ValueError("tenant_id_required")
     target_dir = OUTBOUND_FILE_ROOT / str(tenant_id) / "outbound_files" / str(channel_id) / share_id
-    target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / original_name
-    target_path.write_bytes(content)
+    media_storage.write(target_path, content, tenant_id=tenant_id,
+        boundary=OUTBOUND_FILE_ROOT / str(tenant_id) / "outbound_files" / str(channel_id))
 
     metadata = {
         "tenant_id": tenant_id,
@@ -106,7 +108,17 @@ def store_outbound_upload(
         "file_size": len(content),
         "created_at": now_shanghai().isoformat(),
     }
-    (target_dir / "meta.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 来源只能由平台调用点提供；不保存提示词、供应商密钥或上游签名 URL。
+    if provenance:
+        if provenance.get("origin") in {"ai_generated", "ai_edited", "sent"}:
+            metadata["origin"] = provenance["origin"]
+        for key in ("conversation_id", "source_message_id", "job_id", "message_id"):
+            value = provenance.get(key)
+            if type(value) is int and value > 0:
+                metadata[key] = value
+    # 用户也可上传 meta.json，不能由同目录的描述文件覆盖附件原文。
+    sidecar = ".meta.json" if original_name.casefold() == "meta.json" else "meta.json"
+    (target_dir / sidecar).write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "share_id": share_id,
         "file_name": original_name,
@@ -117,9 +129,22 @@ def store_outbound_upload(
     }
 
 
+def record_media_delivery(stored: dict[str, Any], *, job_id=None, message_id=None) -> None:
+    """补上平台真实回执编号，供媒体库保护仍在队列里的文件。"""
+
+    metadata = dict(stored["metadata"])
+    for key, value in (("job_id", job_id), ("message_id", message_id)):
+        if type(value) is int and value > 0:
+            metadata[key] = value
+    target = stored["target_path"].parent / (".meta.json" if stored["file_name"].casefold() == "meta.json" else "meta.json")
+    target.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    stored["metadata"] = metadata
+
+
 # 出站载荷里可能携带 base64 的字段,按消息类型映射到“文件地址”字段。
 # 微桥等协议要求图片、视频、语音传路径或 URL,不接受把大文件塞进请求体。
 _MEDIA_BASE64_FIELDS = {
+    "emoji": (("emoji_base64",), "emoji"),
     "image": (("base64", "image_base64"), "image_url"),
     "voice": (("base64", "voice_base64", "audio_base64"), "voice_url"),
     "video": (("base64", "video_base64"), "video_url"),
@@ -146,7 +171,8 @@ def _sniff_extension(content: bytes, message_type: str) -> str:
     return {"image": ".jpg", "video": ".mp4", "voice": ".mp3"}.get(message_type, ".bin")
 
 
-def externalize_media_payload(payload: dict[str, Any], *, tenant_id: int, channel_id: int, public_base_url: str) -> dict[str, Any]:
+def externalize_media_payload(payload: dict[str, Any], *, tenant_id: int, channel_id: int, public_base_url: str,
+                              provenance: dict[str, Any] | None = None) -> dict[str, Any]:
     """把载荷里的 base64 媒体落成文件,并改成可下载的文件地址。
 
     返回新的载荷,不修改入参。库、任务队列和日志里因此只会出现文件地址,
@@ -176,6 +202,7 @@ def externalize_media_payload(payload: dict[str, Any], *, tenant_id: int, channe
         content=content,
         content_type=None,
         message_type=message_type,
+        provenance=provenance,
     )
     result = {key: value for key, value in payload.items() if key not in (*source_fields, *_AUXILIARY_BASE64_FIELDS, "image_base64")}
     result[url_field] = f"{base}/outbound-files/{channel_id}/{stored['share_id']}/{quote(stored['file_name'])}"

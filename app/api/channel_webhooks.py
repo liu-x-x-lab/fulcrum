@@ -84,6 +84,8 @@ async def inbound_webhook(channel_id: int, request: Request):
             headers={key: value for key, value in request.headers.items()},
             source=channel.channel_type,
         )
+        if result.get("reason") == "friend_request_requires_sync":
+            return {"ok": True, "mapped": False, "ignored": True}
         normalized = result["normalized"]
         event_key = str(normalized.get("event_key") or "")
         if result["deduplicated"]:

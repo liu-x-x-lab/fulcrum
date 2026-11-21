@@ -34,7 +34,12 @@ the general Open API contract. Do not copy another business system into this rep
 
 | Topic | Reference |
 | --- | --- |
+| Local images, videos, voice/audio and safe cleanup | [Media library](media-library.md) |
 | WeBridge connection, directory synchronization and friend checks | [WeBridge](wechat_webridge_provider.md) |
+| Native group content moderation and removal results | [Group moderation](group-moderation.md) |
+| Centralized AI connections, encrypted keys and model selection | [AI providers](ai-providers.md) |
+| Quoted images/videos and independent visual model settings | [AI vision](ai-vision.md) |
+| Native text-to-image and exact quoted-image editing | [AI drawing](ai-drawing.md) |
 | iPad channel and login proxy setup | [iPad provider](wechat_ipad_provider.md) |
 | WeCom provider connection | [WeCom provider](workwechat_provider.md) |
 | Windows automation transport | [WinAuto provider](wechat_winauto_provider.md) |

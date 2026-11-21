@@ -229,6 +229,65 @@ def test_due_item_cannot_revoke_another_tenant_or_conversation(env, isolated_que
     assert len(db.scalars(select(TaskJob)).all()) == 1
 
 
+@pytest.mark.parametrize("outcome", ["success", "denied", "timeout", "partial", "restart", "changed_account", "expired"])
+def test_ipad_text_recall_shares_one_job_and_requires_a_confirmed_result(env, isolated_queue, monkeypatch, outcome):
+    from app.core.tenant_context import tenant_scope
+    from app.services import message_actions
+    from app.services.channel_adapters.service import dispatch_outbound_message
+    from app.services.channel_adapters.wechat_ipad import WechatIpadAdapter
+    from app.services.wechat_ipad import recall
+
+    db, channel, conversation = env
+    channel.channel_type = conversation.channel_type = "wechat_ipad"
+    channel.api_base = "https://provider.invalid"
+    channel.adapter_config_json = '{"wxid":"bot"}'
+    sent = int(now_shanghai().timestamp())
+    row = {"Ret": 0, "ToUsetName": {"string": conversation.external_id},
+           "NewMsgId": 2**60 + 1, "Createtime": sent, "ClientMsgid": 33}
+    ack = {"Success": True, "Code": 0, "Data": {"BaseResponse": {"ret": 0}, "List": [row]}}
+    monkeypatch.setattr(WechatIpadAdapter, "_post_json", lambda *args: ack)
+    calls = []
+
+    def post(self, target, endpoint, *, body):
+        assert endpoint == "/api/Msg/Revoke" and target.api_base == channel.api_base
+        calls.append(body)
+        if outcome == "timeout":
+            raise TimeoutError()
+        return {"Success": True, "Code": 0, "Data": {"BaseResponse":
+                {} if outcome == "partial" else {"ret": -1 if outcome == "denied" else 0}}}
+
+    monkeypatch.setattr(recall.WechatIpadApiClient, "request_json", post)
+    with tenant_scope(channel.tenant_id):
+        msg, _ = dispatch_outbound_message(db, channel, conversation, {"content": "测试"}, auto_revoke=POLICY)
+        assert msg.external_message_id == str(row["NewMsgId"])
+        assert message_actions.request_revoke(db, channel, conversation, msg)["ok"]
+        db.commit()
+        item, = isolated_queue.take_due(now=time.monotonic() + 81)
+        assert revoke.execute_due_revoke(db, item)["ok"]
+        db.commit()
+        job = db.scalars(select(TaskJob)).one()
+        payload = json.loads(job.payload_json)
+        if outcome == "restart":
+            raw = json.loads(msg.raw_request_json)
+            raw["revoke"]["state"] = "dispatching"
+            msg.raw_request_json = json.dumps(raw)
+        elif outcome == "changed_account":
+            channel.adapter_config_json = '{"wxid":"different"}'
+        elif outcome == "expired":
+            row["Createtime"] -= 121
+            msg.raw_response_json = json.dumps(ack)
+        db.commit()
+        recall.process(db, job, payload)
+        expected = {"success": "revoked", "denied": "failed", "changed_account": "failed", "expired": "failed"}.get(outcome, "unknown")
+        assert json.loads(msg.raw_request_json)["revoke"]["state"] == expected
+        assert (msg.status == "revoked") == (expected == "revoked")
+        assert job.status == ("completed" if outcome == "success" else "failed")
+        recall.process(db, job, payload)
+        assert calls == ([] if outcome in {"restart", "changed_account", "expired"} else [
+            {"Wxid": "bot", "ToUserName": conversation.external_id, "NewMsgId": 2**60 + 1,
+             "CreateTime": sent, "ClientMsgId": 33}])
+
+
 def test_guga_receipt_saves_native_ids_and_uses_same_countdown(env, isolated_queue):
     """咕嘎消息使用手机本地/服务器编号，不能拿请求 UUID 冒充撤回编号。"""
 

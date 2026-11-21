@@ -76,6 +76,11 @@ def is_enabled(chatroom: Chatroom | None, feature_key: str) -> bool:
     return bool(feature and get_state(chatroom, feature)[0])
 
 
+def ipad_removal_confirmed(chatroom: Chatroom) -> bool:
+    saved = (_load_extra(chatroom).get(EXTRA_KEY) or {}).get("moderation") or {}
+    return saved.get("ipad_removal_confirmed") is True
+
+
 def save_state(chatroom: Chatroom, feature_key: str, *, enabled: bool, config: dict[str, Any] | None = None) -> None:
     """保存开关与配置;config 为 None 时只改开关,保留原配置。"""
 
@@ -98,6 +103,11 @@ def save_state(chatroom: Chatroom, feature_key: str, *, enabled: bool, config: d
             else:
                 new_config[item.key] = _coerce(item, raw)
         entry["config"] = new_config
+        if feature_key == "moderation":
+            # 旧版的移除选项只针对微桥；点总开关不代表确认新增的 iPad 执行范围。
+            entry["ipad_removal_confirmed"] = new_config.get("mode") == "kick"
+    if feature.validate_config:
+        feature.validate_config({**feature.defaults(), **(entry.get("config") or {})})
     features[feature_key] = entry
     extra[EXTRA_KEY] = features
     chatroom.extra_json = json.dumps(extra, ensure_ascii=False, sort_keys=True)
@@ -122,6 +132,8 @@ def set_flag(chatroom: Chatroom, feature_key: str, field: str, value: bool) -> C
     features = extra.get(EXTRA_KEY) if isinstance(extra.get(EXTRA_KEY), dict) else {}
     entry = features.get(feature_key) if isinstance(features.get(feature_key), dict) else {}
     if item is None:
+        if value and feature.validate_config:
+            feature.validate_config(get_state(chatroom, feature)[1])
         entry["enabled"] = bool(value)
     else:
         config = entry.get("config") if isinstance(entry.get("config"), dict) else {}

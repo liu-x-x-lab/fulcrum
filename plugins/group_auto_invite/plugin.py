@@ -164,6 +164,8 @@ def _handle_join_command(
         member_external_ids=[sender_id],
     )
     if not bool(result.get("ok")):
+        if result.get("status") == "unknown":
+            return _error_result("邀请结果待核实，请先查看微信，不要重复邀请。", "invite_unknown")
         # 渠道错误详情会进入平台执行记录，最终用户只看到稳定的业务提示，避免
         # 暴露协议地址、上游响应或内部错误码。
         return _error_result("群邀请暂未发送，请稍后重试或联系管理员。", "invite_failed")

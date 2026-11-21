@@ -230,6 +230,21 @@
     if (event.target.closest("[data-pp-open-versions]")) openVersions(card);
   });
 
+  // 全站 dialog.js 在捕获阶段确认通过后重新提交；此处只处理实际提交的防重复状态。
+  grid.addEventListener("submit", function (event) {
+    var form = event.target;
+    if (!form.matches("[data-pp-uninstall]")) return;
+    if (form.dataset.submitting === "true") {
+      event.preventDefault();
+      return;
+    }
+    form.dataset.submitting = "true";
+    var button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    button.textContent = "正在卸载…";
+    button.setAttribute("aria-busy", "true");
+  });
+
   /* ---------- 上传安装:选好文件后先确认再提交 ---------- */
   var upload = document.querySelector("[data-pp-upload]");
   if (upload) {

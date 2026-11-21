@@ -1,0 +1,65 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="work-surface media-library" data-media-library>
+  {% set filter_active = filters.query or filters.kind or filters.source or filters.channel_id or filters.start or filters.end %}
+  <details class="compact-filter disclosure" open data-filter-active="{{ 'true' if filter_active else 'false' }}">
+    <summary class="compact-filter-summary"><span>筛选媒体</span>{% if filter_active %}<span class="compact-filter-summary-text">已应用条件</span>{% endif %}</summary>
+    <form method="get" action="/media" class="compact-filter-form">
+      <label class="compact-filter-field compact-filter-field-query"><span>文件名</span><input name="query" value="{{ filters.query }}" maxlength="100" placeholder="搜索文件名" /></label>
+      <label class="compact-filter-field"><span>类型</span><select name="kind"><option value="">全部类型</option>{% for value, label in kinds.items() %}<option value="{{ value }}"{% if filters.kind == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label class="compact-filter-field"><span>来源</span><select name="source"><option value="">全部来源</option>{% for value, label in sources.items() %}<option value="{{ value }}"{% if filters.source == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label class="compact-filter-field"><span>账号</span><select name="channel_id"><option value="0">全部账号</option>{% for channel in library.channels %}<option value="{{ channel.id }}"{% if filters.channel_id == channel.id %} selected{% endif %}>{{ channel.name }}</option>{% endfor %}</select></label>
+      <label class="compact-filter-field"><span>开始日期</span><input type="date" name="start" value="{{ filters.start }}" /></label>
+      <label class="compact-filter-field"><span>结束日期</span><input type="date" name="end" value="{{ filters.end }}" /></label>
+      <div class="compact-filter-actions"><button class="btn" type="submit">筛选</button><a class="btn btn-secondary" href="/media">重置</a></div>
+    </form>
+  </details>
+  <div class="media-library-bar">
+    <span>{{ library.count }} 条来源 · {{ library.unique_count }} 份独立内容 · {{ '%.1f'|format(library.stored_bytes / 1048576) }} MiB{% if library.shared_bytes %} · 已共享节省 {{ library.shared_bytes }} B{% endif %}</span>
+    {% if can_manage %}
+    {# 扫描与批量操作共用一组；扫描表单独立，删除仍明确关联原删除表单。 #}
+    <div class="media-library-actions">
+      <form method="post" action="/media/deduplicate/scan" data-media-operation="扫描中…">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><input type="hidden" name="channel_id" value="{{ filters.channel_id }}" />
+        <button class="btn btn-secondary" type="submit" data-media-scan>扫描重复文件</button>
+      </form>
+      {% if library['items'] %}
+      <label class="checkbox-field"><input type="checkbox" data-media-select-all /><span>选择本页</span></label>
+      <button class="btn btn-secondary" type="submit" form="media-delete-form" data-media-delete disabled data-confirm-mode="confirm" data-confirm-tone="danger" data-confirm-title="删除本地媒体" data-confirm-message="永久删除所选来源的本地文件，无法恢复。其他来源仍使用的共享文件保留；聊天记录和手机文件不会删除。">删除所选</button>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% if can_manage %}
+  <p class="muted-text" role="status" data-media-operation-status hidden></p>
+  {% endif %}
+  {% if library.limited %}<p class="muted-text" role="status">文件较多，本次只检查前 10000 条记录。请按账号缩小范围；统计仅包含已检查的文件。</p>{% endif %}
+  {% if can_manage %}<form method="post" action="/media/delete" id="media-delete-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}" /></form>{% endif %}
+  <div class="media-grid">
+  {% for item in library['items'] %}
+    <article class="media-tile media-tile-{{ item.kind }}" data-media-item>
+      <div class="media-preview">
+        {% if item.kind == 'image' %}
+        <button type="button" class="media-open" data-media-open="image" data-url="/media/items/{{ item.ref }}/file" aria-label="预览 {{ item.name }}"><img loading="lazy" src="/media/items/{{ item.ref }}/file" alt="{{ item.name }}" /></button>
+        {% elif item.kind == 'video' %}
+        <button type="button" class="media-open" data-media-open="video" data-url="/media/items/{{ item.ref }}/file" aria-label="播放 {{ item.name }}"><img data-video-cover="/media/items/{{ item.ref }}/cover" alt="" hidden /><span class="media-video-play">▶ 播放视频</span></button>
+        {% elif item.kind == 'audio' %}
+        <audio controls preload="none" src="/media/items/{{ item.ref }}/file?preview=1" aria-label="试听 {{ item.name }}"></audio><span class="media-play-error" role="status" hidden>暂不能试听，可下载原文件</span>
+        {% else %}<span>文件</span>{% endif %}
+      </div>
+      {% if can_manage %}<label class="media-tile-select"><input type="checkbox" name="refs" value="{{ item.ref }}" form="media-delete-form" aria-label="选择 {{ item.name }}" data-media-select /></label>{% endif %}
+      <details class="media-info">
+        <summary aria-label="文件信息 {{ item.name }}"><span aria-hidden="true">ⓘ</span></summary>
+        <div class="media-info-panel">
+          <strong class="media-file-title">{{ item.name }}</strong>
+          <div class="media-file-meta"><span>{{ sources[item.source] }} · {{ item.size_label }}</span><span>{{ item.channel_name }}</span><time>{{ item.created_at|bj_time }}</time></div>
+          <div class="form-actions-inline"><a class="btn btn-secondary" href="/media/items/{{ item.ref }}/file?download=1">下载</a>{% if item.conversation_id %}<a class="btn btn-secondary" href="/messages?conversation_id={{ item.conversation_id }}">来源会话</a>{% elif item.source == 'moments' %}<a class="btn btn-secondary" href="/moments?channel_id={{ item.channel_id }}">来源动态</a>{% endif %}</div>
+        </div>
+      </details>
+    </article>
+  {% else %}<p class="wechat-empty">没有找到已保存的媒体</p>{% endfor %}
+  </div>
+  {% if library.pages > 1 %}<nav class="media-pagination" aria-label="媒体分页">{% if library.page > 1 %}<a class="btn btn-secondary" href="{{ previous_url }}">上一页</a>{% endif %}<span>{{ library.page }} / {{ library.pages }}</span>{% if library.page < library.pages %}<a class="btn btn-secondary" href="{{ next_url }}">下一页</a>{% endif %}</nav>{% endif %}
+</section>
+{% endblock %}
+{% block scripts %}<script src="/static/js/media-library.js" defer></script>{% endblock %}

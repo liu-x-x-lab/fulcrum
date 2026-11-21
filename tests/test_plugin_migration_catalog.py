@@ -44,7 +44,8 @@ EXISTING_PLUGIN_CODES = {
 # 新插件会按计划逐个加入，因此目录集合只要求它们是允许出现的代码，不在基础提交里
 # 强迫 15 个插件一次性全部存在。最终完整性由交付阶段的迁移验证脚本负责。
 NEW_PLUGIN_CODES = {
-    "ai_gen_image",
+    "image_source_search",
+    "moviepilot",
     "codex_quota_allocator",
     "daily_ranking",
     "dota2_stats",
@@ -61,11 +62,12 @@ NEW_PLUGIN_CODES = {
     "xiuxian",
 }
 
-SAAS_OWN_PLUGIN_CODES = {"customer_operations", "supplier_order_flow", "idiom_guess", "guess_image"}
+SAAS_OWN_PLUGIN_CODES = {"article_summary", "customer_operations", "supplier_order_flow", "idiom_guess", "guess_image"}
 
 # 这些能力已经明确排除或上移为平台原生能力。测试直接禁止同名目录出现，防止
 # 研发过程中为了快速复用又把单机管理链路或不需要的内容带回来。
 FORBIDDEN_PLUGIN_CODES = {
+    "ai_gen_image",
     "plugin_manager",
     "stats_collector",
     "system_updater",

@@ -1,0 +1,17 @@
+{# 沿用群功能现有明细样式，状态表示处罚结果，不把提示入队当成送达。 #}
+<details class="pay-ledger disclosure">
+  <summary><span class="pay-ledger-title">最近治理记录</span></summary>
+  <div class="pay-ledger-body">
+    {% if moderation_records %}
+    <div class="pay-table-wrap">
+      <table class="table pay-table">
+        <thead><tr><th>时间</th><th>成员</th><th>命中词</th><th>累计次数</th><th>处理结果</th></tr></thead>
+        <tbody>{% for row in moderation_records %}
+          <tr><td>{{ row.time|bj_time }}</td><td>{{ row.member }}</td><td>{{ row.word }}</td><td>{{ row.count }}</td><td>{{ row.status }}{% if row.note %}<br><small>{{ row.note }}</small>{% endif %}</td></tr>
+        {% endfor %}</tbody>
+      </table>
+    </div>
+    <p class="muted-text pay-note">显示最近 20 条。结果待确认的移出操作不会自动重试，请核实群成员状态。</p>
+    {% else %}<p class="muted-text pay-note">暂无违规记录。</p>{% endif %}
+  </div>
+</details>

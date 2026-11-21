@@ -37,7 +37,14 @@ def ingest_inbound_event(
     *,
     headers: dict[str, str] | None = None,
     source: str | None = None,
+    ipad_group_signals: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    if channel.channel_type == "wechat_ipad":
+        from app.services.wechat_ipad.operations.friend_requests import contains_request
+
+        if contains_request(payload):
+            return {"ok": True, "ignored": True, "mapped": False, "normalized": {}, "deduplicated": False,
+                    "reason": "friend_request_requires_sync", "raw_event_id": None}
     logger.info(
         "ingesting inbound event",
         extra={"channel_id": channel.id, "channel_type": channel.channel_type, "source": source or channel.channel_type},
@@ -50,6 +57,7 @@ def ingest_inbound_event(
         normalized,
         source=source,
         raw_payload=payload,
+        ipad_group_signals=ipad_group_signals,
     )
 
 
@@ -73,6 +81,7 @@ def ingest_normalized_event(
     *,
     source: str | None = None,
     raw_payload: dict[str, Any] | None = None,
+    ipad_group_signals: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     event_key = str(normalized.get("event_key") or "").strip()
     # 已逻辑删除的账号不再接收任何事件。
@@ -265,7 +274,10 @@ def ingest_normalized_event(
                 "member_created": bool(materialize_result.get("member_created")),
             },
         )
-        if chatroom_sync_signal:
+        if chatroom_sync_signal and ipad_group_signals is not None:
+            # 拉取批次统一去重并复用同一客户端，Webhook 单事件仍就地刷新。
+            ipad_group_signals.append(chatroom_sync_signal)
+        elif chatroom_sync_signal:
             logger.info(
                 "wechat ipad inbound event triggering chatroom sync",
                 extra={
@@ -407,6 +419,10 @@ def ingest_normalized_event(
         raw_event=raw_event,
         normalized=normalized,
     )
+    if channel.channel_type == "wechat_ipad" and details.get("member_change"):
+        # 原始系统消息已归档，邀请证据保留原类型；插件匹配使用与微桥一致的消息类型。
+        change = details["member_change"]["change_type"]
+        message_payload["message_type"] = "group_member_join" if change == "join" else "group_member_leave"
     _attach_message_attachments_to_normalized_event(
         db,
         channel=channel,
@@ -680,9 +696,17 @@ def _queue_inbound_media_fetch_if_needed(
     attachment_type = str(message.message_type or "").strip()
     if attachment_type not in {"image", "voice", "video"}:
         return
+    if getattr(message, "direction", "in") != "in" or is_self_sent(normalized) or expired_message_dispatch(normalized):
+        return
     # 手机端下载媒体很耗资源(上传一次最长可达数十秒并占用手机串行通道,会拖慢消息上报),
     # 因此 iPad 与微桥统一按“群自动下载附件”开关控制,默认关闭;私聊不下载。
     if not _chatroom_auto_download_media_enabled(db, channel=channel, conversation=conversation):
+        return
+    # 事件重放和其他消费者共用附件；已删除的本地副本也不能被自动任务悄悄重新下载。
+    if db.scalar(select(MessageAttachment.id).where(
+        MessageAttachment.message_id == message.id, MessageAttachment.channel_id == channel.id,
+        MessageAttachment.attachment_type == attachment_type,
+    )) is not None:
         return
     details = normalized.get("details")
     if not isinstance(details, dict):
@@ -729,7 +753,10 @@ def _queue_inbound_media_fetch_if_needed(
             related_type="message_attachment",
             related_id=attachment.id,
         )
-    attachment.metadata_json = json.dumps({**media_info, "upload_job_id": job.id, "requested_at": now_shanghai().isoformat()}, ensure_ascii=False)
+    # 自动下载和按需下载共用状态，AI 等待已有任务，不再下发第二次手机上传。
+    attachment.metadata_json = json.dumps(
+        {**media_info, "upload_job_id": job.id, "requested_at": now_shanghai().isoformat()}, ensure_ascii=False,
+    )
 
 
 def _chatroom_auto_download_media_enabled(
@@ -761,8 +788,8 @@ def _update_chatroom_member_last_active(
     conversation: Conversation,
     normalized: dict[str, Any],
 ) -> None:
-    # 微桥由消息目录入口维护活跃时间和成员状态,统一处理媒体、系统事件及乱序保护。
-    if channel.channel_type == "wechat_webridge":
+    # 这两个渠道的目录入口已经核对系统事件和成员时序，不能在公共路径重新激活成员。
+    if channel.channel_type in {"wechat_webridge", "wechat_ipad"}:
         return
     conversation_payload = normalized.get("conversation") or {}
     if str(conversation_payload.get("chat_type") or "").strip() != "group":

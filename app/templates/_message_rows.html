@@ -13,9 +13,21 @@
   <blockquote class="msg-quote-refer">{% if view.refer_name %}<strong>{{ view.refer_name }}</strong>{% endif %}<span>{{ view.refer_text }}</span></blockquote>
 </div>
 
+{% elif view.kind == 'article' %}
+{# 一次推送保留一组文章，每篇都有独立链接；封面失败不影响标题和摘要阅读。 #}
+<div class="msg-articles">
+  {% for entry in view.articles %}
+  {% if entry.url %}<a class="msg-article" href="{{ entry.url }}" target="_blank" rel="noopener noreferrer">{% else %}<div class="msg-article">{% endif %}
+    {% if entry.cover %}<img class="msg-article-cover" data-card-cover src="{{ entry.cover }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" />{% endif %}
+    <span class="msg-card-copy"><strong>{{ entry.title }}</strong>{% if entry.desc %}<small>{{ entry.desc }}</small>{% endif %}</span>
+  {% if entry.url %}</a>{% else %}</div>{% endif %}
+  {% endfor %}
+  {% if view.source %}<div class="msg-articles-source">{{ view.source }}</div>{% endif %}
+</div>
+
 {% elif view.kind in ['link', 'mini_program', 'merged', 'notice'] %}
 {% if view.url %}<a class="msg-card" href="{{ view.url }}" target="_blank" rel="noopener noreferrer">{% else %}<div class="msg-card">{% endif %}
-  <span class="msg-card-icon" data-icon="{{ view.kind }}" aria-hidden="true"></span>
+  {% if view.cover %}<img class="msg-card-cover" data-card-cover src="{{ view.cover }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" />{% else %}<span class="msg-card-icon" data-icon="{{ view.kind }}" aria-hidden="true"></span>{% endif %}
   <span class="msg-card-copy">
     <strong>{{ view.title }}</strong>
     {% if view.desc %}<small>{{ view.desc }}</small>{% endif %}
@@ -57,10 +69,10 @@
       {{ who.name if who and who.name else ('我方' if is_out else '联系人') }}
       {% if who and who.show_id and not is_out %}<small class="identity-id">{{ who.external_id }}</small>{% endif %}
       · {{ item.created_at|bj_time if item.created_at else '-' }}
-      {% if view.revoke_state == 'pending' %}<span class="wechat-msg-status">撤回中</span>{% elif view.revoke_state == 'failed' %}<span class="wechat-msg-status">撤回失败</span>{% endif %}
+      {% if view.revoke_state in ('pending', 'dispatching') %}<span class="wechat-msg-status">撤回中</span>{% elif view.revoke_state == 'failed' %}<span class="wechat-msg-status">撤回失败</span>{% elif view.revoke_state == 'unknown' %}<span class="wechat-msg-status">撤回结果待核实</span>{% endif %}
     </div>
     <article tabindex="0" aria-label="消息，右键或按 Shift + F10 打开操作菜单" class="wechat-message-bubble {{ 'out' if is_out else 'in' }}{% if view.kind not in ['text', 'quote', 'system'] %} is-card{% endif %}">
-      {% if is_out and item.status == 'failed' %}<span class="wechat-send-error" role="img" title="发送失败，请检查渠道后重试" aria-label="发送失败">!</span>{% endif %}
+      {% if is_out and item.status == 'failed' %}{% if item.external_status == 'unknown' %}<span class="wechat-msg-status">发送结果待核实</span>{% else %}<span class="wechat-send-error" role="img" title="发送失败，请检查渠道后重试" aria-label="发送失败">!</span>{% endif %}{% endif %}
       {% if item.status == 'revoked' or view.revoke_state == 'revoked' %}<div class="msg-system">{{ '你撤回了一条消息' if is_out else '对方撤回了一条消息' }}</div>{% else %}{{ message_body(view, item) }}{% endif %}
     </article>
   </div>

@@ -58,7 +58,14 @@
       {% if row.usage.bindings %}<span class="chip chip-muted" title="{{ row.usage.enabled }}/{{ row.usage.bindings }} 个绑定启用">{{ row.usage.tenants }} 个租户在用</span>{% endif %}
       {% if row.versions %}<button class="pp-chip-btn" type="button" data-pp-open-versions title="回滚到旧版本">历史版本 {{ row.versions|length }}</button>{% endif %}
       <span class="chip chip-danger" data-pp-off-chip{% if not stopped %} hidden{% endif %}>已停用</span>
-      {% if plugin.missing_at %}<span class="chip chip-danger" title="自 {{ format_time(plugin.missing_at) }} 起在插件目录里找不到,记录和租户数据都保留">目录缺失</span>{% endif %}
+      {# 卸载复用全站确认弹窗，影响范围放在确认步骤，卡片只保留一个明确操作。 #}
+      <form method="post" action="/platform/plugins/{{ plugin.code }}/uninstall" class="pp-uninstall" data-pp-uninstall
+        data-confirm-mode="confirm" data-confirm-tone="danger" data-confirm-title="卸载「{{ plugin.display_name }}」？"
+        data-confirm-message="将停止 {{ row.usage.tenants }} 个租户、{{ row.usage.bindings }} 个机器人绑定的后续执行，并移除插件文件。绑定、配置、密钥和历史数据保留；重新安装后需手动启用。"
+        data-confirm-confirm-text="卸载">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button class="btn btn-ghost btn-small" type="submit">卸载</button>
+      </form>
     </footer>
   </article>
   {% else %}

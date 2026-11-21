@@ -58,6 +58,8 @@ session-env/
 plugins/store/
 plugins/_staging/
 plugins/_versions/
+# 卸载恢复副本可能包含私有资源与配置，只保留在服务器本地。
+plugins/_uninstalled/
 plugins/plugin-directory-cache-v2.json
 
 # 私有插件包:只在内网部署中使用,不进入公开仓库(目录保留在本地和部署主机上)。

@@ -85,8 +85,9 @@ def _safe_call(func: Any, *, stage: str, trace_endpoint: str | None = None, **kw
     try:
         payload = func(**kwargs)
     except Exception as exc:
-        logger.exception(
+        logger.error(
             "wechat ipad provider call raised",
+            exc_info=stage != "message_sync",
             extra={
                 "stage": stage,
                 "endpoint": trace_endpoint or "",
@@ -112,8 +113,8 @@ def _safe_call(func: Any, *, stage: str, trace_endpoint: str | None = None, **kw
             "ok": ok,
             "http_status": http_status,
             "code": WechatIpadApiClient.extract_code(payload),
-            "provider_message": WechatIpadApiClient.extract_message(payload) or "",
-            "payload_preview": _summarize_provider_payload(payload),
+            "provider_message": "" if stage == "message_sync" else WechatIpadApiClient.extract_message(payload) or "",
+            "payload_preview": {} if stage == "message_sync" else _summarize_provider_payload(payload),
         },
     )
     return {

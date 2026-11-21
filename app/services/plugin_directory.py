@@ -27,7 +27,7 @@ from app.core.time import now_shanghai
 from app.services.plugin_governance import blocked_plugin_codes
 from app.services.config_fields import ConfigField
 from app.services.plugin_manifest import ManifestParseError, PluginSchedule, parse_manifest, read_config_fields, read_schedules
-from app.services.outbound_files import externalize_media_payload, redact_base64_fields
+from app.services.outbound_files import externalize_media_payload, record_media_delivery, redact_base64_fields, store_outbound_upload
 from app.models.entities import BotPlugin, Channel, Chatroom, Conversation, GroupPluginScope, Plugin, TaskJob
 from app.services.plugin_secrets import decrypt_plugin_secret_config
 from app.services.plugin_scopes import group_plugin_scope_enabled
@@ -45,7 +45,6 @@ ALLOWED_CONSUME_POLICIES = {"continue", "stop", "consume", "exclusive"}
 STOP_CONSUME_POLICIES = {"stop", "consume", "exclusive"}
 DISPLAY_NAME_OVERRIDES = {
     "ai_auto_response": "AI自动回复",
-    "ai_gen_image": "AI绘图",
     "dify": "Dify 对话",
     "douyin_parser": "抖音解析",
     "douyu": "斗鱼",
@@ -641,7 +640,7 @@ def _enqueue_ai_intent(
             # 本账号自己发的消息(含机器人回复回流)不是用户在向 AI 提问,不进 AI;
             # 否则私聊里 AI 会对着自己的回复继续回复。普通插件命令不受影响,仍可用本账号手动触发。
             return False
-        if context.message_type != "text" or not ai_dispatch.should_trigger(
+        if context.message_type not in {"text", "quote"} or not ai_dispatch.should_trigger(
             context.chat_type, context.mentioned_self, context.message_text
         ):
             return False
@@ -693,11 +692,14 @@ def send_ai_reply(
     text: str,
     *,
     conversation_id: int | None,
-) -> None:
+    replies: list[dict] | None = None,
+    media_origin: str = "",
+    source_message_id: int | None = None,
+) -> list[dict]:
     """AI 核心向用户回一句话（缺参数时的追问）；复用插件自动出站链，保持引用等统一行为。"""
 
-    if not text or not conversation_id:
-        return
+    if not (text or replies) or not conversation_id:
+        return []
     static_context = _build_dispatch_context(channel, dict(normalized_event))
     directory_context = DirectoryPluginContext(
         plugin_code="ai_dispatch",
@@ -715,7 +717,11 @@ def send_ai_reply(
         normalized_event=normalized_event,
         conversation_id=conversation_id,
     )
-    _dispatch_auto_outbound_messages(db, static_context, directory_context, {"reply_text": text})
+    output = {"replies": replies} if replies else {"reply_text": text}
+    if media_origin in {"ai_generated", "ai_edited"}:
+        output["media_origin"] = media_origin
+        output["source_message_id"] = source_message_id
+    return _dispatch_auto_outbound_messages(db, static_context, directory_context, output)
 
 
 def evaluate_dynamic_matches(
@@ -1485,6 +1491,16 @@ def _dispatch_auto_outbound_messages(
             "chat_type": context.chat_type,
             **item,
         }
+        saved_image = None
+        if output.get("media_origin") in {"ai_generated", "ai_edited"} and payload.get("message_type") == "image" and payload.get("base64"):
+            # 所有渠道均保留已生成结果；发送失败也不丢掉已付费图片，更不能通过重新生成恢复。
+            saved_image = store_outbound_upload(tenant_id=int(channel.tenant_id), channel_id=int(channel.id),
+                file_name="image.png", content=base64.b64decode(payload["base64"], validate=True),
+                content_type="image/png", message_type="image", provenance={"origin": output["media_origin"],
+                    "conversation_id": conversation.id, "source_message_id": output.get("source_message_id")})
+            if channel.channel_type == "wechat_webridge" and settings.public_base_url:
+                payload.pop("base64")
+                payload["image_url"] = f"{str(settings.public_base_url).rstrip('/')}/outbound-files/{channel.id}/{saved_image['share_id']}/image.png"
         if channel.channel_type == "wechat_webridge":
             # 微桥协议只接受路径或 URL:base64 先落成文件,库、队列和日志只保留文件地址;
             # 再由协议层把统一消息类型映射成微桥原生命令(send_image/send_video 等),手机 poll 直接领取。
@@ -1493,6 +1509,7 @@ def _dispatch_auto_outbound_messages(
                 tenant_id=int(channel.tenant_id),
                 channel_id=int(channel.id),
                 public_base_url=str(settings.public_base_url or ""),
+                provenance={"origin": "sent", "conversation_id": conversation.id},
             )
             if any(str(key).lower().endswith("base64") and value for key, value in payload.items()):
                 logger.error("auto outbound media dropped because public base url is missing", extra={"plugin_code": context.plugin_code})
@@ -1503,6 +1520,8 @@ def _dispatch_auto_outbound_messages(
             # 目录插件、原生插件和 AI 路由的回复共用有效绑定配置，群差异已经合并。
             message, adapter_result = dispatch_outbound_message(db, channel, conversation, payload,
                 auto_revoke=auto_revoke_policy(context.binding_config))
+            if saved_image:
+                record_media_delivery(saved_image, job_id=adapter_result.get("job_id"), message_id=int(message.id))
             if not adapter_result.get("ok"):
                 error = str(adapter_result.get("error_message") or adapter_result.get("error_code") or "webridge_send_failed")
                 logger.error("auto outbound webridge send failed", extra={"plugin_code": context.plugin_code, "error": error})
@@ -1538,7 +1557,12 @@ def _dispatch_auto_outbound_messages(
                 priority=90,
                 related_type="conversation",
                 related_id=conversation.id,
+                max_attempts=1 if channel.channel_type == "wechat_ipad" and (
+                    item.get("message_type") == "emoji" or item.get("message_type") in {"file", "video"} and not item.get("xml")
+                ) else 3,
             )
+        if saved_image:
+            record_media_delivery(saved_image, job_id=int(job.id))
         notify_cloud_job_enqueued(channel, job)
         result_item = {
             "ok": True,
@@ -1594,8 +1618,8 @@ def _build_auto_outbound_payloads(
 
 # 回复方式：plain 普通文本；quote 引用触发消息；mention @触发人；both 引用并 @。
 REPLY_MODES = ("plain", "quote", "mention", "both")
-# 只有微桥协议支持引用与 @，其他渠道保持普通文本，避免把渠道差异散落到插件里。
-REPLY_MODE_CHANNEL_TYPES = {"wechat_webridge"}
+# 由平台负责将回复意图适配到支持的渠道。
+REPLY_MODE_CHANNEL_TYPES = {"wechat_webridge", "wechat_ipad"}
 DEFAULT_REPLY_MODE = "quote"
 
 
@@ -1616,7 +1640,8 @@ def _apply_reply_mode(
     # 引用会被手机端整条拒绝(quote_message_id not found);事件也没有“触发人”可 @,只发普通文本。
     if str(context.message_type or "").startswith("group_member_"):
         return payloads
-    mode = str(output.get("reply_mode") or context.binding_config.get("reply_mode") or DEFAULT_REPLY_MODE).strip().lower()
+    default = "plain" if context.channel_type == "wechat_ipad" else DEFAULT_REPLY_MODE
+    mode = str(output.get("reply_mode") or context.binding_config.get("reply_mode") or default).strip().lower()
     if mode not in REPLY_MODES or mode == "plain":
         return payloads
     message = context.normalized_event.get("message") if isinstance(context.normalized_event, Mapping) else None
@@ -1627,6 +1652,14 @@ def _apply_reply_mode(
         if item.get("message_type") != "text":
             continue
         updated = dict(item)
+        if context.channel_type == "wechat_ipad":
+            if mode in ("quote", "both"):
+                updated["reply_to_id"] = context.message_id
+            if mode in ("mention", "both") and sender_id:
+                updated["at"] = sender_id
+                updated["content"] = f"@{message.get('sender_name') or sender_id} {updated.get('content') or ''}"
+            payloads[index] = updated
+            break
         if mode in ("quote", "both") and quote_id:
             updated["quote_message_id"] = quote_id
         if mode in ("mention", "both") and sender_id:
@@ -1700,6 +1733,11 @@ def _normalize_reply_item(item: Mapping[str, Any], *, channel_type: str = "") ->
     if reply_type == "text":
         content = str(item.get("content") or item.get("text") or "").strip()
         return {"message_type": "text", "content": content} if content else None
+    if reply_type == "emoji":
+        from app.services.plugin_runtime.replies import emoji_reply
+
+        reply = emoji_reply(base64_data=item.get("emoji_base64") or "")
+        return {"message_type": "emoji", "emoji_base64": reply["emoji_base64"]}
     if reply_type in {"xml", "card", "app"}:
         xml = str(item.get("xml") or item.get("content") or "").strip()
         if not xml:

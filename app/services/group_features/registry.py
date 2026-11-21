@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from app.services.config_fields import ConfigField
 
@@ -29,6 +29,8 @@ class GroupFeature:
     event_types: tuple[str, ...] = ()
     # 只在这些渠道类型的群里提供(页面不显示其他渠道);留空表示所有渠道。
     channel_types: tuple[str, ...] = ()
+    # 复杂业务字段在保存和开关启用时复核，界面仍由同一声明生成。
+    validate_config: Callable[[dict[str, Any]], None] | None = None
 
     def defaults(self) -> dict[str, Any]:
         return {item.key: item.default for item in self.fields}
@@ -70,10 +72,10 @@ def _ensure_loaded() -> None:
     if _loaded:
         return
     _loaded = True
-    from app.services.group_features import ai_chat, inactive_rank, media_download, member_change, red_packet, transfer_receive, trigger_reply  # noqa: F401
+    from app.services.group_features import ai_chat, inactive_rank, media_download, member_change, moderation, red_packet, transfer_receive, trigger_reply  # noqa: F401
 
     # 目录事件会先单独导入成员解析器;页面顺序仍按这里的声明,不能受首次入站事件影响。
-    ordered = {module.FEATURE.key: module.FEATURE for module in (ai_chat, inactive_rank, media_download, member_change, red_packet, transfer_receive, trigger_reply)}
+    ordered = {module.FEATURE.key: module.FEATURE for module in (moderation, ai_chat, inactive_rank, media_download, member_change, red_packet, transfer_receive, trigger_reply)}
     ordered.update(_FEATURES)
     _FEATURES.clear()
     _FEATURES.update(ordered)

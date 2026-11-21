@@ -428,7 +428,9 @@ def _execute_scheduled_action(db: Session, request: PluginExecutionRequest) -> P
         result = _start(db, group_context, conversation, config, cursor, position=position, daily_date=today)
         if not result.ok:
             raise ValueError(result.message)
-        if result.status == "already_started":
+        # 顶层 status 是 completed/skipped；具体业务状态放在 provider_status。
+        # 当天已开局或没有回复时，不推进题号，也不计为已创建发图任务。
+        if result.output.get("provider_status") == "already_started" or not result.output.get("replies"):
             continue
         started += 1
         for reply in result.output["replies"]:

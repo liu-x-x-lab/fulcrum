@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import Request
 
 from app.core.settings import settings
+from app.services import media_storage
 from app.services.outbound_files import build_public_base_url, sanitize_upload_filename
 
 
@@ -37,9 +38,9 @@ def store_inbound_upload(
     if int(tenant_id or 0) <= 0:
         raise ValueError("tenant_id_required")
     target_dir = INBOUND_FILE_ROOT / str(tenant_id) / "inbound_files" / str(channel_id) / share_id
-    target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / original_name
-    target_path.write_bytes(content)
+    media_storage.write(target_path, content, tenant_id=tenant_id,
+        boundary=INBOUND_FILE_ROOT / str(tenant_id) / "inbound_files" / str(channel_id))
 
     metadata = {
         "tenant_id": tenant_id,
@@ -51,7 +52,8 @@ def store_inbound_upload(
         "source_event_key": str(source_event_key or "").strip() or None,
         "created_at": now_shanghai().isoformat(),
     }
-    (target_dir / "meta.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    sidecar = ".meta.json" if original_name.casefold() == "meta.json" else "meta.json"
+    (target_dir / sidecar).write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "share_id": share_id,
         "file_name": original_name,

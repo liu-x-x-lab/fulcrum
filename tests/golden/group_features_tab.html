@@ -38,17 +38,17 @@
 </div>
 </div>
 </form>
-<form method="post" action="/channels/2/chatrooms/1/features/ai_chat" class="gf-card is-on" data-gf-card data-gf-key="ai_chat" data-gf-save-url="/channels/2/chatrooms/1/features/ai_chat">
+<form method="post" action="/channels/2/chatrooms/1/features/moderation" class="gf-card is-on" data-gf-card data-gf-key="moderation" data-gf-save-url="/channels/2/chatrooms/1/features/moderation">
 <header class="gf-head">
 <div class="gf-head-copy" data-gf-toggle-title>
-<h3>AI 对话</h3>
-<p>群友 @ 机器人说的不是功能时,机器人按人格直接聊天并记住对方。未单独设置时跟随租户「AI 助手」里的聊天开关;需先启用 AI 总开关。</p>
+<h3>敏感词治理</h3>
+<p>命中后警告或累计踢出，并停止该消息的其他自动处理。</p>
 </div>
 <div class="gf-head-actions">
 <label class="gf-master" title="在本群开启或关闭">
 <span class="gf-master-text" data-gf-state>已开启</span>
 <span class="ui-switch">
-<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/ai_chat/toggle" data-autosave-json='{"field":"enabled"}' checked />
+<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/moderation/toggle" data-autosave-json='{"field":"enabled"}' checked />
 <span class="ui-switch-track">
 </span>
 </span>
@@ -60,22 +60,122 @@
 <div class="gf-collapse" data-gf-collapse hidden>
 <div class="gf-body">
 <section class="gf-section config-section">
-<h4>独立模型(可选,留空沿用租户统一设置)</h4>
+<h4>匹配</h4>
 <div class="gf-inputs config-flow">
 <label class="gf-field config-field gf-field-wide config-field-wide">
-<span class="gf-field-label">接口地址</span>
-<input type="text" name="cfg_api_base" value="示例值-api_base" />
-<small>例如 https://api.openai.com/v1</small>
+<span class="gf-field-label">敏感词</span>
+<textarea name="cfg_words" rows="4" maxlength="2000">示例值-words</textarea>
+<small>每行一个，忽略英文大小写和全半角。</small>
 </label>
 <label class="gf-field config-field gf-field-wide config-field-wide">
-<span class="gf-field-label">模型名称</span>
-<input type="text" name="cfg_model" value="示例值-model" />
-<small>例如 gpt-4o-mini</small>
+<span class="gf-field-label">豁免成员 ID</span>
+<textarea name="cfg_exempt_members" rows="4" maxlength="2000">示例值-exempt_members</textarea>
+<small>每行一个。群主、管理员和机器人自身始终豁免。</small>
 </label>
+</div>
+</section>
+<section class="gf-section config-section">
+<h4>处理</h4>
+<div class="gf-inputs config-flow">
+<label class="gf-field config-field config-field-short">
+<span class="gf-field-label">处理方式</span>
+<select name="cfg_mode">
+<option value="warn">仅警告</option>
+<option value="kick" selected>累计踢出（微桥、iPad）</option>
+</select>
+</label>
+<label class="gf-field config-field config-field-numeric config-field-short" data-gf-show-when="cfg_mode" data-gf-show-value="kick">
+<span class="gf-field-label">踢出次数</span>
+<input type="number" name="cfg_threshold" value="4" min="1" max="1000" />
+</label>
+<label class="gf-field config-field config-field-numeric config-field-short">
+<span class="gf-field-label">累计周期（小时）</span>
+<input type="number" name="cfg_window_hours" value="3" min="0" max="8760" />
+<small>0 为长期累计；其他值按最近指定小时统计。</small>
+</label>
+</div>
+</section>
+<section class="gf-section config-section">
+<h4>提示语</h4>
+<div class="gf-inputs config-flow">
 <label class="gf-field config-field gf-field-wide config-field-wide">
-<span class="gf-field-label">密钥</span>
-<input type="password" name="cfg_api_key" autocomplete="new-password" placeholder="已配置，留空则保持不变" />
-<small>只保存加密后的值,页面不会回显</small>
+<span class="gf-field-label">警告提示</span>
+<textarea name="cfg_warning_text" rows="4" maxlength="2000">示例值-warning_text</textarea>
+<small>支持 {member}、{count}、{limit}、{group}，留空不发送。</small>
+</label>
+<label class="gf-field config-field gf-field-wide config-field-wide" data-gf-show-when="cfg_mode" data-gf-show-value="kick">
+<span class="gf-field-label">踢出成功提示</span>
+<textarea name="cfg_kick_text" rows="4" maxlength="2000">示例值-kick_text</textarea>
+<small>收到手机成功回报后发送；变量同上，留空不发送。</small>
+</label>
+</div>
+</section>
+</div>
+<footer class="gf-foot">
+<button class="btn" type="submit">
+<span class="i i-save" aria-hidden="true">
+</span>
+<span>保存</span>
+</button>
+</footer>
+</div>
+<details class="pay-ledger disclosure">
+<summary>
+<span class="pay-ledger-title">最近治理记录</span>
+</summary>
+<div class="pay-ledger-body">
+<p class="muted-text pay-note">暂无违规记录。</p>
+</div>
+</details>
+</form>
+<form method="post" action="/channels/2/chatrooms/1/features/ai_chat" class="gf-card" data-gf-card data-gf-key="ai_chat" data-gf-save-url="/channels/2/chatrooms/1/features/ai_chat">
+<header class="gf-head">
+<div class="gf-head-copy" data-gf-toggle-title>
+<h3>AI 对话</h3>
+<p>群友 @ 机器人说的不是功能时,机器人按人格直接聊天并记住对方。未单独设置时跟随租户「AI 助手」里的聊天开关;需先启用 AI 总开关。</p>
+</div>
+<div class="gf-head-actions">
+<label class="gf-master" title="在本群开启或关闭">
+<span class="gf-master-text" data-gf-state>未开启</span>
+<span class="ui-switch">
+<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/ai_chat/toggle" data-autosave-json='{"field":"enabled"}' />
+<span class="ui-switch-track">
+</span>
+</span>
+</label>
+<button class="gf-toggle" type="button" data-gf-toggle aria-expanded="false" aria-label="展开或收起设置" title="展开或收起设置">
+</button>
+</div>
+</header>
+<div class="gf-collapse" data-gf-collapse hidden>
+<div class="gf-body">
+<div class="full-row form-grid" data-ai-model-picker>
+<label><span>对话供应商</span><select name="cfg_provider_id" data-ai-provider><option value="" data-models="[]">沿用租户默认</option></select></label>
+<label><span>对话模型</span><span class="config-suggestions" data-config-suggestions><input type="text" name="cfg_model" value="示例值-model" maxlength="100" list="ai-models-cfg_model" data-ai-model autocomplete="off" placeholder="搜索或输入模型 ID" /><datalist id="ai-models-cfg_model" data-ai-model-list></datalist></span></label>
+</div>
+<section class="gf-section config-section">
+<h4>视觉理解</h4>
+<div class="gf-switch-list">
+<label class="gf-row config-switch">
+<span class="gf-row-label">允许识别引用图片和视频<small class="field-hint">使用租户「AI 助手」单独配置的视觉模型；仅被提问时上传媒体。视频抽帧分析，不含声音。</small>
+</span>
+<span class="ui-switch ui-switch-small">
+<input type="checkbox" name="cfg_vision_enabled" value="true" role="switch" data-autosave-url="/channels/2/chatrooms/1/features/ai_chat/toggle" data-autosave-json='{"field":"vision_enabled"}' />
+<span class="ui-switch-track">
+</span>
+</span>
+</label>
+</div>
+</section>
+<section class="gf-section config-section">
+<h4>绘图</h4>
+<div class="gf-switch-list">
+<label class="gf-row config-switch">
+<span class="gf-row-label">允许绘图和引用改图<small class="field-hint">使用 AI 助手选择的绘图供应商；每次生成一张图片，可能产生费用。</small></span>
+<span class="ui-switch ui-switch-small">
+<input type="checkbox" name="cfg_image_enabled" value="true" role="switch" data-autosave-url="/channels/2/chatrooms/1/features/ai_chat/toggle" data-autosave-json='{"field":"image_enabled"}' checked />
+<span class="ui-switch-track"></span>
+</span>
 </label>
 </div>
 </section>
@@ -136,7 +236,7 @@
 </footer>
 </div>
 </form>
-<form method="post" action="/channels/2/chatrooms/1/features/inactive_rank" class="gf-card" data-gf-card data-gf-key="inactive_rank" data-gf-save-url="/channels/2/chatrooms/1/features/inactive_rank">
+<form method="post" action="/channels/2/chatrooms/1/features/inactive_rank" class="gf-card is-on" data-gf-card data-gf-key="inactive_rank" data-gf-save-url="/channels/2/chatrooms/1/features/inactive_rank">
 <header class="gf-head">
 <div class="gf-head-copy" data-gf-toggle-title>
 <h3>潜水排行</h3>
@@ -144,9 +244,9 @@
 </div>
 <div class="gf-head-actions">
 <label class="gf-master" title="在本群开启或关闭">
-<span class="gf-master-text" data-gf-state>未开启</span>
+<span class="gf-master-text" data-gf-state>已开启</span>
 <span class="ui-switch">
-<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/inactive_rank/toggle" data-autosave-json='{"field":"enabled"}' />
+<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/inactive_rank/toggle" data-autosave-json='{"field":"enabled"}' checked />
 <span class="ui-switch-track">
 </span>
 </span>
@@ -182,7 +282,7 @@
 </footer>
 </div>
 </form>
-<form method="post" action="/channels/2/chatrooms/1/features/media_download" class="gf-card is-on" data-gf-card data-gf-key="media_download">
+<form method="post" action="/channels/2/chatrooms/1/features/media_download" class="gf-card" data-gf-card data-gf-key="media_download">
 <header class="gf-head">
 <div class="gf-head-copy">
 <h3>自动下载附件</h3>
@@ -190,9 +290,9 @@
 </div>
 <div class="gf-head-actions">
 <label class="gf-master" title="在本群开启或关闭">
-<span class="gf-master-text" data-gf-state>已开启</span>
+<span class="gf-master-text" data-gf-state>未开启</span>
 <span class="ui-switch">
-<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/media_download/toggle" data-autosave-json='{"field":"enabled"}' checked />
+<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/media_download/toggle" data-autosave-json='{"field":"enabled"}' />
 <span class="ui-switch-track">
 </span>
 </span>
@@ -200,7 +300,7 @@
 </div>
 </header>
 </form>
-<form method="post" action="/channels/2/chatrooms/1/features/member_change" class="gf-card" data-gf-card data-gf-key="member_change" data-gf-save-url="/channels/2/chatrooms/1/features/member_change">
+<form method="post" action="/channels/2/chatrooms/1/features/member_change" class="gf-card is-on" data-gf-card data-gf-key="member_change" data-gf-save-url="/channels/2/chatrooms/1/features/member_change">
 <header class="gf-head">
 <div class="gf-head-copy" data-gf-toggle-title>
 <h3>群成员变更提醒</h3>
@@ -208,9 +308,9 @@
 </div>
 <div class="gf-head-actions">
 <label class="gf-master" title="在本群开启或关闭">
-<span class="gf-master-text" data-gf-state>未开启</span>
+<span class="gf-master-text" data-gf-state>已开启</span>
 <span class="ui-switch">
-<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/member_change/toggle" data-autosave-json='{"field":"enabled"}' />
+<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/member_change/toggle" data-autosave-json='{"field":"enabled"}' checked />
 <span class="ui-switch-track">
 </span>
 </span>
@@ -333,7 +433,7 @@
 </footer>
 </div>
 </form>
-<form method="post" action="/channels/2/chatrooms/1/features/red_packet" class="gf-card is-on" data-gf-card data-gf-key="red_packet" data-gf-save-url="/channels/2/chatrooms/1/features/red_packet">
+<form method="post" action="/channels/2/chatrooms/1/features/red_packet" class="gf-card" data-gf-card data-gf-key="red_packet" data-gf-save-url="/channels/2/chatrooms/1/features/red_packet">
 <header class="gf-head">
 <div class="gf-head-copy" data-gf-toggle-title>
 <h3>自动抢红包</h3>
@@ -341,9 +441,9 @@
 </div>
 <div class="gf-head-actions">
 <label class="gf-master" title="在本群开启或关闭">
-<span class="gf-master-text" data-gf-state>已开启</span>
+<span class="gf-master-text" data-gf-state>未开启</span>
 <span class="ui-switch">
-<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/red_packet/toggle" data-autosave-json='{"field":"enabled"}' checked />
+<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/red_packet/toggle" data-autosave-json='{"field":"enabled"}' />
 <span class="ui-switch-track">
 </span>
 </span>
@@ -400,7 +500,7 @@
 </div>
 </details>
 </form>
-<form method="post" action="/channels/2/chatrooms/1/features/transfer_receive" class="gf-card" data-gf-card data-gf-key="transfer_receive">
+<form method="post" action="/channels/2/chatrooms/1/features/transfer_receive" class="gf-card is-on" data-gf-card data-gf-key="transfer_receive">
 <header class="gf-head">
 <div class="gf-head-copy">
 <h3>自动收款</h3>
@@ -408,9 +508,9 @@
 </div>
 <div class="gf-head-actions">
 <label class="gf-master" title="在本群开启或关闭">
-<span class="gf-master-text" data-gf-state>未开启</span>
+<span class="gf-master-text" data-gf-state>已开启</span>
 <span class="ui-switch">
-<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/transfer_receive/toggle" data-autosave-json='{"field":"enabled"}' />
+<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/transfer_receive/toggle" data-autosave-json='{"field":"enabled"}' checked />
 <span class="ui-switch-track">
 </span>
 </span>
@@ -444,7 +544,7 @@
 </div>
 </details>
 </form>
-<form method="post" action="/channels/2/chatrooms/1/features/trigger_reply" class="gf-card is-on" data-gf-card data-gf-key="trigger_reply">
+<form method="post" action="/channels/2/chatrooms/1/features/trigger_reply" class="gf-card" data-gf-card data-gf-key="trigger_reply">
 <header class="gf-head">
 <div class="gf-head-copy">
 <h3>触发回复</h3>
@@ -452,9 +552,9 @@
 </div>
 <div class="gf-head-actions">
 <label class="gf-master" title="在本群开启或关闭">
-<span class="gf-master-text" data-gf-state>已开启</span>
+<span class="gf-master-text" data-gf-state>未开启</span>
 <span class="ui-switch">
-<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/trigger_reply/toggle" data-autosave-json='{"field":"enabled"}' checked />
+<input type="checkbox" name="enabled" value="true" role="switch" data-gf-master data-on-text="已开启" data-off-text="未开启" data-autosave-url="/channels/2/chatrooms/1/features/trigger_reply/toggle" data-autosave-json='{"field":"enabled"}' />
 <span class="ui-switch-track">
 </span>
 </span>

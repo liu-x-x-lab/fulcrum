@@ -3,6 +3,7 @@
    card 来自 config_fields.build_sections 的结果(key/name/description/enabled/sections/has_inputs);
    action 是保存表单的提交地址,toggle_url 是开关点击即保存的地址,save_url 是有输入项时的保存地址。
    调用方可以用 {% call %} 在卡片末尾追加内容(如收款明细)。 #}
+{% from '_ai_model_picker.html' import model_picker %}
 {% macro config_card(card, action, toggle_url, save_url) %}
   <form method="post" action="{{ action }}" class="gf-card{% if card.enabled %} is-on{% endif %}" data-gf-card data-gf-key="{{ card.key }}"{% if card.has_inputs %} data-gf-save-url="{{ save_url }}"{% endif %}>
     <header class="gf-head">
@@ -26,6 +27,7 @@
     {% if card.sections %}
     <div class="gf-collapse" data-gf-collapse hidden>
     <div class="gf-body">
+      {% if card.key == 'ai_chat' %}{{ model_picker(card.ai_catalog, 'cfg_provider_id', 'cfg_model', card.provider_id, card.model, '对话', card.default_ai_models) }}{% endif %}
       {% for section in card.sections %}
       <section class="gf-section config-section">
         {% if section.title %}<h4>{{ section.title }}</h4>{% endif %}

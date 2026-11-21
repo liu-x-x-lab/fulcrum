@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import socket
 import threading
+from io import BytesIO
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from unittest.mock import Mock
 
 import pytest
 
@@ -46,6 +48,64 @@ def test_a_hostname_that_resolves_to_an_internal_address_is_refused(monkeypatch)
 def test_a_public_address_is_allowed(monkeypatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", lambda host, port, **kw: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))])
     assert ensure_public_http_url("https://cdn.example.com/a.png") == "https://cdn.example.com/a.png"
+
+
+@pytest.mark.parametrize("wire,expected", [
+    (b"200 OK\r\nContent-Length: 3\r\n\r\nabc", b"abc"),
+    (b"200 OK\r\nContent-Length: 4\r\n\r\nabc", ValueError),
+    (b"200 OK\r\nContent-Length: 5\r\n\r\nabcde", ValueError),
+    (b"200 OK\r\n\r\nabcde", ValueError),
+    (b"302 Found\r\nLocation: http://internal.test/other\r\n\r\n", UnsafeUrlError),
+])
+@pytest.mark.parametrize("html_only", [False, True])
+def test_file_fetch_pins_connection_and_limits_response(monkeypatch, wire, expected, html_only):
+    resolutions = []
+
+    def resolve(host, port, **_):
+        resolutions.append(host)
+        addr = "93.184.216.34" if host == "cdn.test" else "127.0.0.1"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, port))]
+
+    sock = Mock()
+    if html_only:
+        wire = wire.replace(b"\r\n", b"\r\nContent-Type: text/html; charset=utf-8\r\n", 1)
+    sock.makefile.return_value = BytesIO(b"HTTP/1.1 " + wire)
+    tls = Mock()
+    tls.wrap_socket.return_value = sock
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    monkeypatch.setattr(socket, "socket", Mock(return_value=sock))
+    monkeypatch.setattr(safe_fetch.ssl, "create_default_context", lambda: tls)
+    read = safe_fetch.read_public_html if html_only else safe_fetch.read_public_file
+    if expected == b"abc":
+        result = read("https://cdn.test/x?a=b", 4)
+        assert (result.data if html_only else result) == expected
+        if html_only:
+            assert result.charset == "utf-8"
+    else:
+        with pytest.raises(expected):
+            read("https://cdn.test/x?a=b", 4)
+    assert resolutions == (["cdn.test", "internal.test"] if expected is UnsafeUrlError else ["cdn.test"])
+    sock.connect.assert_called_once_with(("93.184.216.34", 443))
+    tls.wrap_socket.assert_called_once_with(sock, server_hostname="cdn.test")
+    raw = sock.sendall.call_args.args[0]
+    assert b"GET /x?a=b HTTP/1.1" in raw and b"Host: cdn.test\r\n" in raw
+    if html_only:
+        assert b"User-Agent: Mozilla/5.0" in raw and b"Accept-Language: zh-CN" in raw
+    else:
+        assert b"User-Agent:" not in raw and b"Accept-Language:" not in raw
+    assert b"Cookie:" not in raw and b"Authorization:" not in raw
+    assert sock.close.called
+
+
+@pytest.mark.parametrize("headers", [b"Content-Type: video/mp4", b"Content-Type: application/pdf",
+                                      b"Content-Type: text/html\r\nContent-Encoding: gzip", b"X-Missing-Type: 1"])
+def test_html_reader_rejects_unsupported_content(monkeypatch, headers):
+    sock = Mock()
+    sock.makefile.return_value = BytesIO(b"HTTP/1.1 200 OK\r\n" + headers + b"\r\n\r\nnot an article")
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))])
+    monkeypatch.setattr(socket, "socket", Mock(return_value=sock))
+    with pytest.raises(ValueError, match="HTML"):
+        safe_fetch.read_public_html("http://cdn.test/file")
 
 
 def test_a_redirect_to_an_internal_address_is_blocked_on_that_hop(monkeypatch) -> None:

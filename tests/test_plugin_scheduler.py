@@ -420,8 +420,9 @@ def test_due_schedule_scanner_creates_all_plugin_jobs_once(scheduler_fixture) ->
         assert parse_job_payload(member_context_jobs[0])["conversation_id"] == identity["alpha_conversation_id"]
 
 
-def test_group_schedule_override_creates_conversation_scoped_job(scheduler_fixture, monkeypatch) -> None:
-    """群详情保存的定时开关和时间必须进入调度，而不是只躺在覆盖配置里。"""
+@pytest.mark.parametrize("has_conversation", [True, False])
+def test_group_schedule_override_creates_conversation_scoped_job(scheduler_fixture, monkeypatch, has_conversation) -> None:
+    """新同步群也能按群配置开局；只在到期时补建会话，重复扫描不重复入队。"""
 
     from app.core.settings import settings
     from app.services import plugin_directory
@@ -438,7 +439,7 @@ def test_group_schedule_override_creates_conversation_scoped_job(scheduler_fixtu
                 tenant_id=identity["alpha_tenant_id"],
                 bot_id=identity["alpha_bot_id"],
                 channel_id=db.scalars(select(Channel).where(Channel.bot_id == identity["alpha_bot_id"])).first().id,
-                external_id="room-alpha",
+                external_id="room-alpha" if has_conversation else "new-group-without-messages",
                 name="甲群",
                 status="active",
                 management_status="enabled",
@@ -470,16 +471,78 @@ def test_group_schedule_override_creates_conversation_scoped_job(scheduler_fixtu
             current = now_shanghai().replace(
                 year=2026, month=11, day=17, hour=17, minute=5, second=30, microsecond=0
             )
+            conversation_query = select(Conversation).where(
+                Conversation.channel_id == room.channel_id,
+                Conversation.external_id == room.external_id,
+                Conversation.chat_type == "group",
+            )
+            before_jobs = schedule_due_plugin_actions(db, now=current - timedelta(minutes=1))
+            assert not any(job.related_type == "plugin_action:idiom_daily_start" for job in before_jobs)
+            assert len(db.scalars(conversation_query).all()) == int(has_conversation)
             jobs = schedule_due_plugin_actions(db, now=current)
             db.commit()
 
             idiom_jobs = [job for job in jobs if job.related_type == "plugin_action:idiom_daily_start"]
             assert len(idiom_jobs) == 1
             assert idiom_jobs[0].related_type == "plugin_action:idiom_daily_start"
-            assert parse_job_payload(idiom_jobs[0])["conversation_id"] == identity["alpha_conversation_id"]
+            conversations = db.scalars(conversation_query).all()
+            assert len(conversations) == 1
+            conversation = conversations[0]
+            assert parse_job_payload(idiom_jobs[0])["conversation_id"] == conversation.id
+            assert conversation.tenant_id == binding.tenant_id
+            assert conversation.bot_id == binding.bot_id
+            if has_conversation:
+                assert conversation.id == identity["alpha_conversation_id"]
+            else:
+                assert conversation.title == room.name
             assert idiom_jobs[0].available_at == current.replace(second=0, microsecond=0)
+            repeat_jobs = schedule_due_plugin_actions(db, now=current)
+            assert not any(job.related_type == "plugin_action:idiom_daily_start" for job in repeat_jobs)
+            assert len(db.scalars(conversation_query).all()) == 1
     finally:
         plugin_directory._SCAN_CACHE.clear()
+
+
+@pytest.mark.parametrize("blocked_by", ["disabled_channel", "deleted_channel", "wrong_bot", "foreign_channel", "left_group", "disabled_scope"])
+def test_group_schedule_rejects_unavailable_or_unowned_targets(scheduler_fixture, blocked_by) -> None:
+    """补建会话之前也必须验证渠道和群归属，不能对失效或跨归属目标产生写入。"""
+
+    from app.services.plugin_runtime.scheduler import _group_schedule_contexts
+
+    factory, identity = scheduler_fixture
+    with platform_session(factory) as db:
+        foreign_channel = Channel(tenant_id=identity["beta_tenant_id"],
+            bot_id=db.get(BotPlugin, identity["beta_daily_binding_id"]).bot_id,
+            name="其他租户渠道", channel_type="telegram", is_enabled=True)
+        db.add(foreign_channel)
+        db.commit()
+        foreign_channel_id = foreign_channel.id
+    with tenant_scope(identity["alpha_tenant_id"]), tenant_session(factory) as db:
+        binding = db.get(BotPlugin, identity["alpha_daily_binding_id"])
+        channel = db.scalar(select(Channel).where(Channel.bot_id == binding.bot_id))
+        if blocked_by == "disabled_channel":
+            channel.is_enabled = False
+        elif blocked_by == "deleted_channel":
+            channel.deleted_at = now_shanghai()
+        elif blocked_by == "wrong_bot":
+            other_bot = Bot(tenant_id=binding.tenant_id, name="另一机器人", is_enabled=True)
+            db.add(other_bot)
+            db.flush()
+            channel.bot_id = other_bot.id
+        room = Chatroom(tenant_id=binding.tenant_id, bot_id=binding.bot_id,
+            channel_id=foreign_channel_id if blocked_by == "foreign_channel" else channel.id,
+            external_id="blocked-group", name="不可调度群", is_active=True,
+            management_status="enabled", status="left" if blocked_by == "left_group" else "active")
+        db.add(room)
+        db.flush()
+        db.add(GroupPluginScope(tenant_id=binding.tenant_id, channel_id=room.channel_id,
+            chatroom_id=room.id, bot_plugin_id=binding.id, enabled=blocked_by != "disabled_scope",
+            config_override_json=json.dumps({"push_time": "17:05"})))
+        db.flush()
+        before = list(db.scalars(select(Conversation.id)).all())
+        specs = _group_schedule_contexts(db, binding, {}, now_shanghai().replace(hour=17, minute=5, second=30))
+        assert specs == []
+        assert list(db.scalars(select(Conversation.id)).all()) == before
 
 
 def test_daily_news_group_time_override_bypasses_global_last_push_date(scheduler_fixture) -> None:

@@ -245,7 +245,8 @@ def test_load_status_and_file_endpoints(page_env, tmp_path) -> None:
     assert bad.status_code == 400 and bad.json()["ok"] is False
     assert client.post("/moments/media/load", data={"post_id": 999999, "mid": "mid-img"}, headers=headers).status_code == 404
     # 手机传回之后:状态 ready,文件可以取到,并带正确的类型
-    path = tmp_path / "saved.jpg"
+    path = moments_media.storage_dir(channel_id) / f"{loaded['media_id']}.jpg"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(JPEG)
     with ids["factory"]() as db:
         row = db.get(MomentsMedia, loaded["media_id"])

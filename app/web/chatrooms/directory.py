@@ -8,7 +8,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.entities import Bot, BotPlugin, Channel, Chatroom, Conversation, WorkWechatContact
+from app.models.entities import Bot, BotPlugin, Channel, Chatroom, Conversation, IpadFriend, WorkWechatContact
+from app.services.account_identity import account_identity
 from app.services import ai_dispatch, payment_ledger
 from app.services.channel_catalog import channel_supports
 from app.services.chatroom_invitations import build_invitation_graph
@@ -29,12 +30,15 @@ from app.services.directory_pages import (
     chatroom_plugin_options,
 )
 from app.services.group_features.view import build_feature_cards
+from app.services import ai_providers
+from app.services.group_moderation.view import recent_records as moderation_records
 from app.services.group_plugin_settings import attach_group_plugin_settings
 from app.services.identity_directory import _avatar_from_extra
 from app.services.ops import record_audit
 from app.services.saas_auth import has_tenant_role
 from app.services.wechat_ipad import build_wechat_ipad_chatroom_detail
 from app.services.wechat_ipad.chatrooms import update_group_plugin_scope_enabled
+from app.services.wechat_ipad.operations.group_rename import available as rename_available
 from app.services.wechat_webridge import (
     directory_sync as webridge_directory_sync,
     invitation_sync as webridge_invitation_sync,
@@ -48,7 +52,7 @@ from app.web.auth_common import require_tenant_csrf
 from app.web.channels.definitions import GROUP_SCOPE_CHANNEL_TYPES
 from app.web.plugins.routes import _current_tenant_id
 from app.web.shared.access import enforce_role, get_session, require_user
-from app.web.shared.operations import _csrf_from_header
+from app.web.shared.operations import _completed_operation_response, _csrf_from_header
 from app.web.shared.presentation import render
 from app.web.shared.urls import build_url, safe_return_to
 
@@ -88,6 +92,8 @@ async def channel_chatroom_detail_page(request: Request, channel_id: int, chatro
             attach_group_plugin_settings(db, channel, chatroom, detail['bindings'])
         # 资料标签只读取本群已保存的快照；打开页面不自动向设备下发命令。
         detail["profile"] = build_chatroom_profile(channel, chatroom, detail["members"])
+        detail["can_rename"] = (tab == "profile" and rename_available(channel, chatroom)
+                                and has_tenant_role(require_user(request), "operator"))
         # 图谱与成员表使用同一份邀请快照；未知成员只分组展示，不推断额外邀请关系。
         detail["invitations"] = build_invitation_graph(detail["members"])
         # 读取能力提示与已保存的进度，页面 GET 绝不触发逐成员手机查询。
@@ -98,6 +104,7 @@ async def channel_chatroom_detail_page(request: Request, channel_id: int, chatro
             select(Conversation.id).where(Conversation.channel_id == channel.id, Conversation.external_id == chatroom.external_id)
         )
         detail["message_center_href"] = "/messages?" + urlencode({"channel_id": channel.id, **({"conversation_id": int(group_conversation_id)} if group_conversation_id else {"chat_type": "group"})})
+        ai_setting = ai_dispatch.get_ai_setting(db)
         return render(
             request,
             "chatroom_detail.html",
@@ -106,10 +113,14 @@ async def channel_chatroom_detail_page(request: Request, channel_id: int, chatro
             chatroom=chatroom,
             detail=detail,
             back_href=safe_return_to(request.query_params.get("return_to"), f"/chatrooms?channel_id={channel.id}"),
+            can_sync=has_tenant_role(require_user(request), "operator"),
             # 群详情分为 功能/插件/成员/消息/资料 五个标签，非法值回落到功能。
             tab=tab if tab in ("features", "plugins", "members", "profile") else "features",
             # 没单独保存过设置的能力跟随默认值:AI 对话跟随租户「AI 助手」里的聊天开关。
-            features=build_feature_cards(chatroom, channel.channel_type, defaults={"ai_chat": bool(getattr(ai_dispatch.get_ai_setting(db), "chat_enabled", False))}),
+            features=build_feature_cards(chatroom, channel.channel_type, defaults={"ai_chat": bool(getattr(ai_setting, "chat_enabled", False))},
+                ai_catalog=ai_providers.public_catalog(db),
+                default_ai_models=ai_providers.available_models(ai_setting.provider) if ai_setting and ai_setting.provider else []),
+            moderation_records=moderation_records(db, chatroom) if tab == "features" else [],
             group_modes=GROUP_MODE_OPTIONS,
             # 自动抢红包、自动收款的明细与统计,按群功能 key 取(仅微桥的群有这两个功能)。
             ledgers=(
@@ -345,31 +356,36 @@ async def contact_directory_page(request: Request, q: str = "", channel_id: int 
         db.close()
 
 
-@router.post("/contacts/{contact_id}/chat")
-async def start_contact_chat(request: Request, contact_id: int, csrf_token: str = Form(""), return_to: str = Form("")):
+@router.post("/contacts/{contact_key}/chat")
+async def start_contact_chat(request: Request, contact_key: str, csrf_token: str = Form(""), return_to: str = Form("")):
     """从好友列表发起私聊:已有会话直接复用,没有就建一条再进消息中心。"""
 
     enforce_role(request, "ops")
     db = get_session()
     try:
         require_tenant_csrf(db, request, csrf_token)
-        contact = db.scalar(
-            select(WorkWechatContact).where(
-                WorkWechatContact.id == contact_id,
-                WorkWechatContact.contact_kind == "friend",
-                WorkWechatContact.sync_status == "active",
-                WorkWechatContact.deleted_at.is_(None),
-            )
-        )
-        if contact is None:
+        ipad = contact_key.startswith("ipad-")
+        number = contact_key.removeprefix("ipad-")
+        if not number.isascii() or not number.isdigit() or len(number) > 18:
             raise HTTPException(status_code=404, detail="好友不存在")
-        # 核对机器人和渠道归属；锁住同一账号，让并发点击在生产数据库中串行复用会话。
-        channel = db.scalar(select(Channel).join(Bot, Bot.id == Channel.bot_id).where(
-            Channel.id == contact.channel_id, Channel.tenant_id == _current_tenant_id(),
-            Bot.tenant_id == _current_tenant_id(), Channel.deleted_at.is_(None), Bot.deleted_at.is_(None),
-        ).with_for_update())
-        if channel is None:
-            raise HTTPException(status_code=404, detail="好友所属账号不存在")
+        model = IpadFriend if ipad else WorkWechatContact
+        tenant = _current_tenant_id()
+        # 记录键只用于定位；行锁内核验渠道的实际协议、租户及登录账号，拒绝换绑前打开的表单。
+        stmt = select(model, Channel).join(Channel, Channel.id == model.channel_id).join(Bot, Bot.id == Channel.bot_id).where(
+            model.id == int(number), model.tenant_id == tenant, Channel.tenant_id == tenant,
+            Bot.tenant_id == tenant, Channel.deleted_at.is_(None), Bot.deleted_at.is_(None),
+        )
+        if ipad:
+            stmt = stmt.where(Channel.channel_type == "wechat_ipad")
+        else:
+            stmt = stmt.where(Channel.channel_type != "wechat_ipad", model.contact_kind == "friend",
+                              model.sync_status == "active", model.deleted_at.is_(None))
+        pair = db.execute(stmt.with_for_update()).one_or_none()
+        if pair is None:
+            raise HTTPException(status_code=404, detail="好友不存在")
+        contact, channel = pair
+        if ipad and (not contact.owner_wxid or contact.owner_wxid != account_identity(channel)["external_id"]):
+            raise HTTPException(status_code=404, detail="好友不存在")
         if not channel.is_enabled or not channel.bot.is_enabled:
             raise HTTPException(status_code=400, detail="好友所属账号已停用")
         if not channel_supports(channel.channel_type, "direct_chat"):
@@ -387,6 +403,7 @@ async def start_contact_chat(request: Request, contact_id: int, csrf_token: str 
                 Conversation.chat_type == "direct",
             )
             .order_by(Conversation.id.asc())
+            .limit(1).with_for_update()
         )
         if conversation is None:
             title = str(contact.display_name or contact.name or contact.contact_external_id)[:255]
@@ -406,3 +423,27 @@ async def start_contact_chat(request: Request, contact_id: int, csrf_token: str 
         return RedirectResponse(url=build_url("/messages", conversation_id=conversation.id, channel_id=channel.id, return_to=safe_return_to(return_to, "")), status_code=303)
     finally:
         db.close()
+
+
+@router.post("/channels/{channel_id}/wechat-ipad/friends/{friend_id}/remark")
+def edit_ipad_friend_remark(request: Request, channel_id: int, friend_id: int, expected: str = Form(""),
+                          remark: str = Form(""), clear: bool = Form(False), csrf_token: str = Form(""),
+                          return_to: str = Form("")):
+    from app.services.wechat_ipad.operations.friend_remark import change
+
+    user = enforce_role(request, "ops")
+    with get_session() as db:
+        require_tenant_csrf(db, request, _csrf_from_header(request) or csrf_token)
+        # 与目录同步按相同顺序锁住渠道、好友，避免换绑和并发提交改变已验证的目标。
+        channel = db.scalar(select(Channel).join(Bot).where(
+            Channel.id == channel_id, Channel.tenant_id == user.tenant_id, Channel.channel_type == "wechat_ipad",
+            Channel.deleted_at.is_(None), Channel.is_enabled.is_(True), Bot.tenant_id == user.tenant_id,
+            Bot.deleted_at.is_(None), Bot.is_enabled.is_(True)).with_for_update())
+        owner = account_identity(channel)["external_id"] if channel and channel.api_base else ""
+        friend = db.scalar(select(IpadFriend).where(IpadFriend.id == friend_id, IpadFriend.channel_id == channel_id,
+                           IpadFriend.tenant_id == user.tenant_id, IpadFriend.owner_wxid == owner).with_for_update()) if owner else None
+        if friend is None:
+            raise HTTPException(status_code=404, detail="未找到当前账号下的好友")
+        ok, summary = change(channel, friend, expected=expected, remark=remark, clear=clear)
+        record_audit(db, "channel.wechat-ipad.friend-remark", "ipad_friend", friend.id, summary, actor=user.username)
+        return _completed_operation_response(request, summary, safe_return_to(return_to, "/contacts"), ok=ok)

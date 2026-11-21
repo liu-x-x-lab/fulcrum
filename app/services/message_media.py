@@ -30,8 +30,12 @@ REQUEST_TIMEOUT_SECONDS = 150
 
 def _latest_attachment(db: Session, message: Message) -> MessageAttachment | None:
     return db.scalar(
-        select(MessageAttachment)
-        .where(MessageAttachment.message_id == message.id, MessageAttachment.attachment_type == message.message_type)
+        select(MessageAttachment).join(Conversation, Conversation.id == MessageAttachment.conversation_id)
+        .where(
+            MessageAttachment.message_id == message.id, MessageAttachment.attachment_type == message.message_type,
+            MessageAttachment.tenant_id == message.tenant_id, MessageAttachment.conversation_id == message.conversation_id,
+            MessageAttachment.channel_id == Conversation.channel_id, Conversation.tenant_id == message.tenant_id,
+        )
         .order_by(MessageAttachment.id.desc())
         .limit(1)
     )
@@ -96,8 +100,10 @@ def request(db: Session, message: Message) -> dict[str, Any]:
         return current
     conversation = db.get(Conversation, message.conversation_id)
     channel = db.get(Channel, conversation.channel_id) if conversation is not None and conversation.channel_id else None
-    if channel is None:
+    if channel is None or channel.tenant_id != message.tenant_id or channel.bot_id != conversation.bot_id:
         return _result("failed", None, "这个渠道暂不支持按需获取媒体")
+    if channel.channel_type == "wechat_ipad":
+        return _request_wechat_ipad(db, message=message, channel=channel, conversation=conversation)
     if channel.channel_type == "wechat_gugatool":
         # iOS 渠道的媒体在手机本地，按 DownloadMessageMedia → DownloadFile 两跳取回，
         # 复用入站媒体任务的下载实现，这里只负责建附件记录并入队。
@@ -119,6 +125,46 @@ def request(db: Session, message: Message) -> dict[str, Any]:
         upload_url=build_upload_url(channel, attachment.id), attachment_id=attachment.id,
     )
     attachment.metadata_json = json.dumps({**_meta(attachment), "upload_job_id": int(job.id), "requested_at": now_shanghai().isoformat()}, ensure_ascii=False, sort_keys=True)
+    db.flush()
+    return _result("loading", attachment)
+
+
+def _request_wechat_ipad(db: Session, *, message: Message, channel: Channel, conversation: Conversation) -> dict[str, Any]:
+    """按需恢复 iPad 媒体元数据，仍交给既有媒体 worker 下载，不在 AI 线程调用协议。"""
+
+    from app.services.channel_adapters import get_channel_adapter
+
+    attachment = _latest_attachment(db, message)
+    metadata = _meta(attachment) if attachment is not None else {}
+    if not metadata:
+        event = db.scalar(select(RawWebhookEvent).where(
+            RawWebhookEvent.tenant_id == channel.tenant_id, RawWebhookEvent.channel_id == channel.id,
+            RawWebhookEvent.event_key == message.external_message_id,
+        ).order_by(RawWebhookEvent.id.desc()).limit(1)) if message.external_message_id else None
+        if event is not None:
+            try:
+                payload = json.loads(event.payload_json)
+                normalized = payload if isinstance(payload, dict) and "details" in payload and "message" in payload else get_channel_adapter(channel).normalize_inbound_payload(channel, payload)
+                if str((normalized.get("conversation") or {}).get("external_id")) == conversation.external_id:
+                    metadata = (normalized.get("details") or {}).get(f"{message.message_type}_info") or {}
+            except (TypeError, ValueError):
+                metadata = {}
+    if not isinstance(metadata, dict) or not metadata:
+        return _result("failed", attachment, "缺少原媒体的下载信息，请重新发送")
+    if attachment is None:
+        attachment = create_wechat_media_attachment(
+            db, channel=channel, raw_event_id=None, conversation_id=conversation.id, message_id=message.id,
+            attachment_type=message.message_type, metadata=metadata, provider="wechat_ipad",
+        )
+    attachment.status = "pending"
+    attachment.last_error = None
+    job = enqueue_job(
+        db, job_type=INBOUND_MEDIA_FETCH_JOB, payload={"attachment_id": attachment.id, "channel_id": channel.id},
+        priority=95, related_type="message_attachment", related_id=attachment.id,
+    )
+    attachment.metadata_json = json.dumps(
+        {**metadata, "upload_job_id": job.id, "requested_at": now_shanghai().isoformat()}, ensure_ascii=False,
+    )
     db.flush()
     return _result("loading", attachment)
 

@@ -32,6 +32,7 @@ def build_tenant_navigation(path: str) -> dict[str, object]:
         {"label": "群管理", "href": "/chatrooms", "active": in_chatroom_page or _is_active(normalized_path, ("/chatrooms",))},
         _item("好友", "/contacts", normalized_path, ("/contacts",)),
         _item("消息", "/messages", normalized_path, ("/messages",)),
+        _item("媒体库", "/media", normalized_path, ("/media",)),
         _item("朋友圈", "/moments", normalized_path, ("/moments",)),
         _item("积分", "/points", normalized_path, ("/points",)),
         _item("插件", "/plugins", normalized_path, ("/plugins", "/plugin-admin")),
@@ -44,6 +45,7 @@ def build_tenant_navigation(path: str) -> dict[str, object]:
     # 低频入口收进右上角账号菜单,避免主导航堆满。
     account_nav_items = [
         _item("AI 助手", "/tenant/ai", normalized_path, ("/tenant/ai",)),
+        _item("AI 供应商", "/tenant/ai-providers", normalized_path, ("/tenant/ai-providers",)),
         _item("企业设置", "/tenant/users", normalized_path, ("/tenant",)),
         _item("套餐与订单", "/account/billing", normalized_path, ("/account",)),
         _item("开发文档", "/developer/docs", normalized_path, ("/developer/docs",)),
@@ -65,6 +67,7 @@ def build_tenant_navigation(path: str) -> dict[str, object]:
         section_nav_items = [
             _item("员工管理", "/tenant/users", normalized_path, ("/tenant/users",)),
             _item("AI 助手", "/tenant/ai", normalized_path, ("/tenant/ai",)),
+            _item("AI 供应商", "/tenant/ai-providers", normalized_path, ("/tenant/ai-providers",)),
             _item("开放应用", "/tenant/open-apps", normalized_path, ("/tenant/open-apps",)),
             _item("本地代理连接器", "/tenant/connectors", normalized_path, ("/tenant/connectors",)),
             _item("订阅信息", "/tenant/subscription", normalized_path, ("/tenant/subscription",)),

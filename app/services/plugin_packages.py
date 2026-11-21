@@ -1,4 +1,4 @@
-"""插件包的安装、升级与回滚(热插拔):平台管理员上传 zip,不重启服务即可生效。
+"""插件包的安装、升级、回滚与可恢复卸载：平台管理员操作，不重启服务即可生效。
 
 安全边界:插件在服务进程内运行,拥有服务端代码执行权限,所以只有平台管理员能走这条路径(路由层校验平台会话与 CSRF),
 租户永远不能上传。这里再做包本身的防护:路径穿越、符号链接、加密包、文件数与体积上限、清单必须有效、入口必须能通过语法检查。
@@ -7,6 +7,7 @@
 目录布局(都在 plugins_dir 下,以下划线开头所以不会被当成插件扫描):
 - _staging/<随机名>/   上传后的解压与校验临时区,结束即删除;
 - _versions/<编码>/    每次升级或回滚前自动把当前版本打成 zip 存档(每个插件保留最近 MAX_KEPT_VERSIONS 个),回滚就是装回其中一个。
+- _uninstalled/<编码>/<唯一标识>/ 卸载移入的完整目录，保留本地资源，不参与发现或自动清理。
 """
 
 from __future__ import annotations
@@ -18,8 +19,10 @@ import threading
 import time
 import uuid
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Iterator
 
 from app.core.settings import settings
 from app.services import plugin_directory
@@ -186,12 +189,73 @@ def _forget_loaded_modules(code: str, live: Path) -> None:
 
     import sys
 
-    prefix = str(live)
+    # 必须以目录分隔符结尾，避免卸载 demo 时误清 demo_extra 的模块缓存。
+    prefix = str(live) + "/"
     for key in [key for key in plugin_directory._MODULE_CACHE if key.startswith(prefix)]:
         plugin_directory._MODULE_CACHE.pop(key, None)
-    for name in [name for name in sys.modules if name.startswith(f"fulcrum_plugin_{code}_")]:
+    module_prefix = f"fulcrum_plugin_{code}_"
+    for name in [name for name in sys.modules if name.startswith(module_prefix) and name[len(module_prefix):].isdigit()]:
         sys.modules.pop(name, None)
     plugin_directory._SCAN_CACHE.clear()
+
+
+@contextmanager
+def staged_uninstall(code: str) -> Iterator[str]:
+    """移走完整插件目录，并把数据库提交放在可恢复的文件操作边界内。
+
+    调用方必须在 with 内完成状态、审计及 commit；异常时原路径恢复。
+    成功后保留完整目录（含本地资源），不受版本 ZIP 的体积和保留数量限制。
+    与安装、升级、回滚共用进程锁，防止本进程交叉覆盖同一目录。
+    """
+
+    if not CODE_PATTERN.fullmatch(code or ""):
+        raise PluginPackageError("插件编码不合法，不能卸载公共目录或目录之外的文件")
+    with _LOCK:
+        base = _base_dir()
+        live = base / code
+        if live.is_symlink() or live.resolve().parent != base:
+            raise PluginPackageError("插件目录不能是符号链接或指向插件根目录之外")
+        if not live.is_dir():
+            raise PluginPackageError("插件目录不存在，请刷新列表")
+        # 扫描器会把声明编码归一为目录名，因此必须读取原始声明才能识别目录被替换。
+        # 损坏或缺失清单仍允许卸载；存在明确的其他插件身份时拒绝旧页面操作。
+        try:
+            parsed = parse_manifest((live / "config.toml").read_text(encoding="utf-8"))
+        except (FileNotFoundError, ManifestParseError, UnicodeError):
+            parsed = {}
+        except OSError as exc:
+            raise PluginPackageError("无法读取插件清单，请检查目录权限") from exc
+        plugin_block = parsed.get("plugin", {})
+        declared_code = str(plugin_block.get("code") or "").strip() if isinstance(plugin_block, dict) else ""
+        if declared_code and declared_code != code:
+            raise PluginPackageError("插件编码与目录不一致，不能卸载")
+        # 不允许恢复副本目录通过符号链接写到别处；父目录仅由本服务创建。
+        recovery = base / "_uninstalled"
+        for folder in (recovery, recovery / code):
+            if folder.is_symlink() or folder.resolve().parent not in (base, recovery):
+                raise PluginPackageError("卸载备份目录不安全")
+            try:
+                folder.mkdir(mode=0o700, exist_ok=True)
+            except OSError as exc:
+                raise PluginPackageError("无法建立卸载备份，请检查目录权限") from exc
+        backup = recovery / code / (time.strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex)
+        try:
+            live.rename(backup)
+        except OSError as exc:
+            raise PluginPackageError("无法移走插件目录，原插件未卸载") from exc
+        try:
+            _forget_loaded_modules(code, live)
+            yield backup.relative_to(base).as_posix()
+        except BaseException:
+            # 外部操作若重新创建了同名路径，不覆盖它，也不删除仍可找回的副本。
+            if live.exists() or live.is_symlink():
+                raise PluginPackageError("卸载未完成，原路径已被其他操作占用；恢复副本仍保留")
+            try:
+                backup.rename(live)
+            except OSError as exc:
+                raise PluginPackageError("卸载未完成且目录恢复失败，恢复副本仍保留，请检查目录权限") from exc
+            _forget_loaded_modules(code, live)
+            raise
 
 
 def _install_zip(data: bytes, *, expect_code: str | None, action_hint: str) -> PackageResult:

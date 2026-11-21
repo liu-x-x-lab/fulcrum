@@ -50,7 +50,7 @@
 
     {% if selected.item %}
     {# 发送框:由 messages.js 用 fetch 提交,不刷新页面;Enter 发送,Shift+Enter 换行。 #}
-    <form class="wechat-composer" id="wechat-composer" autocomplete="off">
+    <form class="wechat-composer" id="wechat-composer" autocomplete="off" data-channel-type="{{ selected.item.conversation.channel_type }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <input type="hidden" name="conversation_id" value="{{ selected_conversation_id }}" />
       <div class="wechat-mention-picker" id="wechat-mention-picker" role="listbox" aria-label="选择群成员" hidden></div>

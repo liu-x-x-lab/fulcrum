@@ -68,8 +68,9 @@ def test_real_plugins_declare_ai_hint_and_catalog_filters() -> None:
 def _seed(db):
     """建最小数据：租户、机器人、微桥渠道、已启用的 message_sign、已配置的 AI。"""
 
-    from app.models.entities import Bot, BotPlugin, Channel, Plugin, TenantAiSetting
+    from app.models.entities import AiProvider, Bot, BotPlugin, Channel, Plugin, TenantAiSetting
     from app.models.saas import Tenant
+    from app.services.security import encrypt_secret
 
     db.add(Tenant(id=1, code="t", name="t"))
     db.add(Bot(id=1, tenant_id=1, name="bot"))
@@ -79,10 +80,10 @@ def _seed(db):
     db.add_all([channel, plugin])
     db.flush()
     db.add(BotPlugin(tenant_id=1, bot_id=1, plugin_id=plugin.id, status="enabled"))
-    db.add(TenantAiSetting(
-        tenant_id=1, enabled=True, api_base="https://llm.test/v1", model="m",
-        api_key_encrypted=ai_dispatch.encrypt_secret("k"), daily_limit=10,
-    ))
+    provider = AiProvider(tenant_id=1, name="Test provider", api_base="https://llm.test/v1", api_key_encrypted=encrypt_secret("k"))
+    db.add(provider)
+    db.flush()
+    db.add(TenantAiSetting(tenant_id=1, enabled=True, provider_id=provider.id, model="m", daily_limit=10))
     db.commit()
     return channel
 

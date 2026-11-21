@@ -245,6 +245,41 @@ class ChatroomMember(Base, TenantOwnedMixin, TimestampMixin):
     channel = relationship("Channel")
 
 
+class IpadFriend(Base, TenantOwnedMixin):
+    __tablename__ = "ipad_friends"
+    __table_args__ = (UniqueConstraint("tenant_id", "channel_id", "owner_wxid", "contact_external_id",
+                                       name="uq_ipad_friend_identity"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id", ondelete="CASCADE"))
+    owner_wxid: Mapped[str] = mapped_column(String(128))
+    contact_external_id: Mapped[str] = mapped_column(String(128))
+    name: Mapped[str | None] = mapped_column(String(255))
+    remark: Mapped[str | None] = mapped_column(String(255))
+    alias: Mapped[str | None] = mapped_column(String(128))
+    display_name: Mapped[str] = mapped_column(String(255))
+    avatar_url: Mapped[str | None] = mapped_column(Text)
+    profile_json: Mapped[str | None] = mapped_column(Text)
+    last_synced_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+
+
+class IpadFriendRequest(Base, TenantOwnedMixin):
+    __tablename__ = "ipad_friend_requests"
+    __table_args__ = (UniqueConstraint("tenant_id", "channel_id", "owner_wxid", "ticket_digest",
+                                       name="uq_ipad_friend_request_ticket"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id", ondelete="CASCADE"))
+    owner_wxid: Mapped[str] = mapped_column(String(128))
+    applicant: Mapped[str] = mapped_column(String(128))
+    nickname: Mapped[str] = mapped_column(String(255))
+    ticket_digest: Mapped[str] = mapped_column(String(64))
+    credentials: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20))
+    received_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True))
+    claimed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True))
+
+
 class WorkWechatContact(Base, TenantOwnedMixin, TimestampMixin):
     __tablename__ = "workwechat_contacts"
 
@@ -949,6 +984,22 @@ class PaymentReceipt(Base, TenantOwnedMixin, TimestampMixin):
     settled_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class AiProvider(Base, TenantOwnedMixin, TimestampMixin):
+    """租户独有的模型供应商；密钥只在这里加密保存，能力配置仅引用编号。"""
+
+    __tablename__ = "ai_providers"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_ai_providers_tenant_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    api_base: Mapped[str] = mapped_column(String(255))
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    models_json: Mapped[str] = mapped_column(Text, default="[]")
+    manual_models_json: Mapped[str] = mapped_column(Text, default="[]")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
 class TenantAiSetting(Base, TenantOwnedMixin, TimestampMixin):
     """租户的大模型配置：AI 是平台核心能力，每个租户只有一份，成本由租户自担。"""
 
@@ -958,16 +1009,44 @@ class TenantAiSetting(Base, TenantOwnedMixin, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     # 总开关；关闭后所有群都不会触发 AI 调度，规则触发的插件不受影响。
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    api_base: Mapped[str] = mapped_column(String(255), default="")
+    provider_id: Mapped[int | None] = mapped_column(ForeignKey("ai_providers.id"), nullable=True)
     model: Mapped[str] = mapped_column(String(100), default="")
-    # 密钥经 encrypt_secret 加密保存，页面只展示是否已配置。
-    api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 每日最多调用模型的次数，防止群里刷屏造成费用失控。
     daily_limit: Mapped[int] = mapped_column(Integer, default=200)
     # 聊天兜底开关：没有插件命中且不是功能意图时，由模型按人格直接聊天。
     chat_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # 租户自定义的人格设定（系统提示），留空使用平台默认人格。
     persona: Mapped[str] = mapped_column(Text, default="")
+    # 三种能力独立选供应商，不隐式继承其他能力的凭据。
+    vision_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    vision_provider_id: Mapped[int | None] = mapped_column(ForeignKey("ai_providers.id"), nullable=True)
+    vision_model: Mapped[str] = mapped_column(String(100), default="")
+    image_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    image_provider_id: Mapped[int | None] = mapped_column(ForeignKey("ai_providers.id"), nullable=True)
+    image_model: Mapped[str] = mapped_column(String(100), default="")
+    image_daily_limit: Mapped[int] = mapped_column(Integer, default=20)
+
+    provider = relationship("AiProvider", foreign_keys=[provider_id])
+    vision_provider = relationship("AiProvider", foreign_keys=[vision_provider_id])
+    image_provider = relationship("AiProvider", foreign_keys=[image_provider_id])
+
+
+class AiImageAttempt(Base, TenantOwnedMixin):
+    """收费调用前提交的唯一凭据；进程重启不能把不确定的结果当成未调用。"""
+
+    __tablename__ = "ai_image_attempts"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "message_id", name="uq_ai_image_attempts_message"),
+        Index("ix_ai_image_attempts_tenant_created", "tenant_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"))
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"))
+    source_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="started")
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), default=now_shanghai)
 
 
 class AiDecision(Base, TenantOwnedMixin):

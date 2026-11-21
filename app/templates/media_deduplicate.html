@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="work-surface media-library" data-media-library>
+  <div class="media-library-bar"><span>已检查 {{ plan.scanned }} 条来源 · {{ plan.groups|length }} 组重复 · 预计释放 {{ plan.saved_bytes }} B</span><a class="btn btn-secondary" href="/media?channel_id={{ plan.channel_id }}">返回媒体库</a></div>
+  <p>只合并同一租户内字节完全相同的文件。文件名、群聊来源和历史消息不变；删除一个来源不会影响其他来源。</p>
+  {% if plan.limited %}<p class="muted-text" role="status">本次为部分结果：最多检查 1000 条记录、读取 512 MiB、扫描 10 秒。请按账号缩小范围后继续扫描。</p>{% endif %}
+  {% if plan.skipped %}<p class="muted-text" role="status">{{ plan.skipped }} 个候选文件受保护、已变化或达到限制，未纳入本次整理。</p>{% endif %}
+  {% if plan.groups %}
+  <div class="table-scroll" role="region" aria-label="重复媒体分组" tabindex="0">
+    <table><thead><tr><th scope="col">来源文件</th><th scope="col">预计释放</th></tr></thead><tbody>
+    {% for group in plan.groups %}<tr><td>{% for item in group['items'] %}<div class="media-dedup-name">{{ item.name }} · {{ item.channel_name }}</div>{% endfor %}</td><td>{{ group.saved_bytes }} B</td></tr>{% endfor %}
+    </tbody></table>
+  </div>
+  <p class="muted-text">扫描结果 30 分钟内有效，重新扫描会替换本次结果。整理时再次校验，实际释放量可能更少；未完成部分需重新扫描。</p>
+  <form method="post" action="/media/deduplicate/apply" data-media-operation="整理中…" data-confirm-mode="confirm" data-confirm-title="整理重复媒体" data-confirm-message="将重复副本改为共享存储，保留全部来源和原始内容。已变化或正在使用的文件会跳过。是否继续？">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><input type="hidden" name="token" value="{{ plan.token }}" />
+    <div class="form-actions-inline"><button class="btn" type="submit" data-media-deduplicate>确认整理</button><a class="btn btn-secondary" href="/media?channel_id={{ plan.channel_id }}">取消</a></div>
+  </form>
+  <p class="muted-text" role="status" data-media-operation-status hidden></p>
+  {% else %}<p class="wechat-empty">本次未发现可整理的重复副本，文件未修改。</p>{% endif %}
+</section>
+{% endblock %}
+{% block scripts %}<script src="/static/js/media-library.js" defer></script>{% endblock %}

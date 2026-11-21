@@ -108,7 +108,7 @@ Not recommended for:
 Example:
 
 ```env
-DATABASE_URL=mysql+pymysql://multi_bot_admin:multi_bot_admin_pass@127.0.0.1:3306/multi_bot_admin?charset=utf8mb4
+DATABASE_URL=mysql+pymysql://fulcrum:fulcrum_pass@127.0.0.1:3306/fulcrum?charset=utf8mb4
 DATABASE_POOL_SIZE=10
 DATABASE_MAX_OVERFLOW=20
 DATABASE_POOL_RECYCLE_SECONDS=1800
@@ -298,3 +298,31 @@ On startup the application will:
 - 一个手机号首版只拥有一个企业；试用机器人绑定不可由租户自行更换，付费绑定释放也必须由平台管理员带原因执行。
 - 旧系统数据导入见 [legacy-import.md](../docs/legacy-import.md)，必须先 dry-run，再备份目标库并正式导入。
 - 下载分享码是 128 位随机值，服务端同时校验固定格式、租户目录、渠道目录和解析后的真实路径，不能用可预测 ID 替代。
+
+
+## Renaming an existing deployment to Fulcrum
+
+Compose uses the explicit project name `fulcrum`, containers `fulcrum-app` and
+`fulcrum-mariadb`, image `fulcrum-app:latest`, network `fulcrum_default`, and volume
+`fulcrum_mariadb_data`. Keep the checkout at a single maintained `fulcrum` path.
+
+Before migrating an existing deployment, record its image, mounts, database
+revision, configuration and plugin hashes, and create a verified database backup.
+Set `MBS_DB_NAME` and `MBS_DB_USER` to the existing database and account names in
+the private deployment environment. Keep `DATABASE_URL`, `SECRET_KEY` and
+`ABOT_PLUGIN_SECRET_KEY` unchanged. A Docker resource rename does not rename SQL
+schemas or change the authenticated encryption format of stored plugin secrets.
+
+Stop application writers, stop MariaDB cleanly, and copy its data into the new
+volume while both database instances are stopped. Preserve file ownership and
+verify the copy before starting the same MariaDB image against the new volume.
+Move persistent bind mounts with the checkout and recreate the application using
+the Kitesurf network override. Update Hindsight's external application network to
+`fulcrum_default`; verify connectivity from the new application container.
+
+Compare database revision and row counts before resuming application writers.
+Check readiness, served resources, plugin secret readability and private-file
+hashes after startup. Retain the original volume as a frozen recovery artifact;
+never start two database instances against the same files. Remove obsolete
+containers and networks only after the new deployment is verified. If writes have
+resumed, evaluate and preserve new data before restoring an older backup.

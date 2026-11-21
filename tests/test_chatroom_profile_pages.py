@@ -293,7 +293,7 @@ def test_group_profile_and_backfill_reject_other_tenant_and_unsupported_notice_i
         db.flush()
         other_room = Chatroom(tenant_id=ids['beta'], bot_id=other_bot.id, channel_id=other_channel.id, external_id='other@chatroom')
         db.add(other_room)
-        db.get(Channel, channel_id).channel_type = 'wechat_ipad'
+        db.get(Channel, channel_id).channel_type = 'wechat_gugatool'
         db.commit()
         other_channel_id, other_room_id = other_channel.id, other_room.id
     csrf = _login(client, 'admin')
@@ -305,3 +305,122 @@ def test_group_profile_and_backfill_reject_other_tenant_and_unsupported_notice_i
         assert client.get(base + '/invitations/sync').status_code == 404
         for action in ('sync', 'invitations/backfill', 'invitations/sync'):
             assert client.post(base + '/' + action, data={'csrf_token': csrf}).status_code == 404
+        assert client.post(base + '/rename', data={'csrf_token': csrf, 'name': '新群名', 'expected_name': '旧群名'}).status_code == 404
+
+
+def test_ipad_notice_single_group_sync_and_read_only_profile(profile_page_context, monkeypatch):
+    from app.services.wechat_ipad.client import WechatIpadApiClient
+
+    client, ids, cid, rid = profile_page_context
+    with ids["factory"]() as db:
+        channel = db.get(Channel, cid)
+        channel.channel_type, channel.api_base = "wechat_ipad", "https://example.test"
+        channel.adapter_config_json = '{"wxid":"robot"}'
+        db.commit()
+    calls = []
+    notice = {"Announcement": "第一行\n<script>正文</script>"}
+
+    def protocol(self, channel, endpoint, *, body):
+        assert channel.id == cid and body["Wxid"] == "robot" and body["QID"] == "profile@chatroom"
+        calls.append(endpoint)
+        if endpoint.endswith("/GetChatRoomInfoDetail"):
+            data = notice
+        elif endpoint.endswith("/GetChatRoomInfo"):
+            data = {"ContactList": [{"UserName": {"string": "profile@chatroom"}, "NickName": {"string": "资料群"}}]}
+        else:
+            assert endpoint.endswith("/GetChatRoomMemberDetail")
+            data = {"ChatroomUserName": "profile@chatroom", "ServerVersion": 1, "NewChatroomData": {
+                "MemberCount": 1, "ChatRoomMember": [{"UserName": "robot"}]}}
+        return {"http_status": 200, "Success": True, "Code": 0, "Data": {"BaseResponse": {"ret": 0}, **data}}
+
+    monkeypatch.setattr(WechatIpadApiClient, "request_json", protocol)
+    page = f"/channels/{cid}/chatrooms/{rid}"
+    csrf = _login(client, "operator")
+    form = {"csrf_token": csrf, "tab": "profile"}
+    assert "同步群资料" in client.get(page + "?tab=profile").text
+    assert client.post(page + "/sync", data={**form, "csrf_token": "bad"}).status_code == 403 and not calls
+
+    def sync():
+        return client.post(page + "/sync", data=form, headers={"accept": "application/json"}).json()["ok"]
+
+    assert sync() and sum(p.endswith("/GetChatRoomInfoDetail") for p in calls) == 1
+    initial = client.get(page + "?tab=profile").text
+    assert "第一行\n&lt;script&gt;正文&lt;/script&gt;" in initial and "来自手机缓存" not in initial
+    for invalid in ({}, {"Announcement": "不应保存", "BaseResponse": {"ret": -1}}):
+        notice.clear()
+        notice.update(invalid)
+        assert not sync()
+        html = client.get(page + "?tab=profile").text
+        assert "本次公告读取失败" in html and "第一行" in html and "不应保存" not in html
+    notice.clear()
+    notice["Announcement"] = ""
+    assert sync()
+    html = client.get(page + "?tab=profile").text
+    assert "本次读取的群公告为空" in html and "第一行" not in html
+    count = len(calls)
+    readonly = _login(client, "readonly")
+    assert 'action="' + page + '/sync"' not in client.get(page + "?tab=profile").text
+    assert client.post(page + "/sync", data={"csrf_token": readonly}).status_code == 403 and len(calls) == count
+
+
+@pytest.mark.parametrize("case", ["admin", "owner", "ordinary", "missing_self", "stale_form", "timeout",
+                                  "wrong_room", "unchanged", "rejected", "missing_ret", "partial_roster"])
+def test_ipad_profile_rename(profile_page_context, monkeypatch, case):
+    from app.services.wechat_ipad.client import WechatIpadApiClient
+
+    client, ids, channel_id, room_id = profile_page_context
+    with ids["factory"]() as db:
+        channel = db.get(Channel, channel_id)
+        channel.channel_type, channel.api_base = "wechat_ipad", "https://example.test"
+        channel.adapter_config_json = '{"wxid":"robot"}'
+        room = db.get(Chatroom, room_id)
+        room.remark = "本地备注"
+        db.commit()
+        old, external = room.name, room.external_id
+    new = "已改名称"
+    writes = []
+
+    def protocol(self, target, endpoint, *, body):
+        assert target.api_base == "https://example.test"
+        assert body["Wxid"] == "robot" and body["QID"] == external
+        if endpoint.endswith("/GetChatRoomInfo"):
+            group = "wrong@chatroom" if writes and case == "wrong_room" else external
+            data = {"BaseResponse": {"ret": 0}, "ContactList": [{"UserName": {"string": group},
+                    "NickName": {"string": new if writes and case != "unchanged" else old},
+                    "ChatRoomOwner": "robot" if case == "owner" else "owner", "Remark": {"string": "微信备注"}}]}
+        elif endpoint.endswith("/GetChatRoomMemberDetail"):
+            rows = [{"UserName": "owner", "ChatroomMemberFlag": 25}]
+            if case != "missing_self":
+                rows.append({"UserName": "robot", "ChatroomMemberFlag": 1 if case in {"ordinary", "owner"} else 2049})
+            data = {"BaseResponse": {"ret": 0}, "ChatroomUserName": external, "ServerVersion": 2,
+                    "NewChatroomData": {"MemberCount": len(rows) + int(case == "partial_roster"), "ChatRoomMember": rows}}
+        else:
+            assert endpoint == "/api/Group/SetChatRoomName" and body["Content"] == new
+            writes.append(new)
+            if case == "timeout":
+                raise TimeoutError
+            data = {} if case == "missing_ret" else {"ret": -1 if case == "rejected" else 0,
+                                                    "oplogRet": {"count": 1, "ret": "AA=="}}
+        return {"http_status": 200, "Success": True, "Code": 0, "Data": data}
+
+    monkeypatch.setattr(WechatIpadApiClient, "request_json", protocol)
+    base = f"/channels/{channel_id}/chatrooms/{room_id}"
+    csrf = _login(client, "operator")
+    form = {"csrf_token": csrf, "name": new, "expected_name": "过期表单" if case == "stale_form" else old}
+    if case == "admin":
+        assert base + "/rename" in client.get(base + "?tab=profile").text
+        assert client.post(base + "/rename", data={**form, "csrf_token": "invalid"}).status_code == 403
+    response = client.post(base + "/rename", data=form, headers={"Accept": "application/json"})
+    assert response.status_code == 200
+    confirmed = case in {"admin", "owner"}
+    assert response.json()["ok"] is confirmed
+    if case in {"wrong_room", "timeout", "missing_ret", "unchanged"}:
+        assert "待核实" in response.json()["summary"]
+    assert len(writes) == int(case not in {"ordinary", "missing_self", "stale_form", "partial_roster"})
+    with ids["factory"]() as db:
+        room = db.get(Chatroom, room_id)
+        assert room.name == (new if confirmed else old) and room.remark == "本地备注"
+    if case == "admin":
+        readonly = _login(client, "readonly")
+        assert base + "/rename" not in client.get(base + "?tab=profile").text
+        assert client.post(base + "/rename", data={**form, "csrf_token": readonly}).status_code == 403

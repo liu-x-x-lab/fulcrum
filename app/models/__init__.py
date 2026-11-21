@@ -8,6 +8,8 @@ from app.models.cultivation import (
 )
 from app.models.plugin_business import CouponAccountBinding, FunCommandRule, GroupTriggerRule
 from app.models.guess_image import GuessImageImport, GuessImageQuestion
+from app.models.group_moderation import GroupModerationViolation
+from app.models.moviepilot import MoviePilotDownload, MoviePilotSubscription
 from app.models.saas import (
     BillingOrder,
     BotBinding,
@@ -47,6 +49,9 @@ __all__ = [
     "FunCommandRule",
     "GuessImageImport",
     "GuessImageQuestion",
+    "GroupModerationViolation",
+    "MoviePilotSubscription",
+    "MoviePilotDownload",
     "CultivationClan",
     "CultivationCooldown",
     "CultivationInventory",

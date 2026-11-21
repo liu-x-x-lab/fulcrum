@@ -4,7 +4,7 @@ import json
 import math
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any, Mapping
 
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.tenant_context import require_tenant_id
 from app.core.time import ensure_shanghai_datetime, now_shanghai
-from app.models.entities import BotPlugin, Chatroom, Conversation, GroupPluginScope, Plugin, TaskJob, WeatherSubscription
+from app.models.entities import BotPlugin, Channel, Chatroom, Conversation, GroupPluginScope, Plugin, TaskJob, WeatherSubscription
 from app.services.plugin_governance import blocked_plugin_codes
 from app.services.plugin_runtime.contracts import PluginExecutionContext
 from app.services.plugin_runtime.service import execute_binding_scheduled_action
@@ -409,7 +409,22 @@ def _group_schedule_contexts(
             or int(room.bot_id) != int(binding.bot_id)
             or int(room.channel_id) != int(scope.channel_id)
             or not room.is_active
+            or room.status == "left"
             or room.management_status != "enabled"
+        ):
+            continue
+        # 先判断是否到期，避免关闭定时或尚未到点的群仅因扫描就出现空会话。
+        effective_config = deep_merge_config(base_config, override)
+        specs = _build_declared_schedule_specs(schedules, effective_config, current)
+        if not specs:
+            continue
+        channel = db.get(Channel, int(room.channel_id))
+        if (
+            channel is None
+            or int(channel.tenant_id) != int(binding.tenant_id)
+            or int(channel.bot_id) != int(binding.bot_id)
+            or not channel.is_enabled
+            or channel.deleted_at is not None
         ):
             continue
         conversation = db.scalar(
@@ -422,12 +437,21 @@ def _group_schedule_contexts(
             ).order_by(Conversation.id)
         )
         if conversation is None:
-            continue
-        effective_config = deep_merge_config(base_config, override)
-        specs = _build_declared_schedule_specs(
-            schedules, effective_config, current, conversation_id=int(conversation.id)
-        )
+            # 新同步的受管群可能还没收到消息；只为已验证且到期的目标补建会话，
+            # 与后续定时任务共用调用方事务，不提交其他业务改动。
+            conversation = Conversation(
+                tenant_id=binding.tenant_id,
+                bot_id=binding.bot_id,
+                channel_id=channel.id,
+                channel_type=channel.channel_type,
+                external_id=room.external_id,
+                title=room.name,
+                chat_type="group",
+            )
+            db.add(conversation)
+            db.flush()
         for spec in specs:
+            spec = replace(spec, conversation_id=int(conversation.id))
             key = (spec.action_key, spec.scheduled_for, spec.conversation_id)
             if key in seen:
                 continue

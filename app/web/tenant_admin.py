@@ -23,7 +23,7 @@ from app.services.tenant_admin import (
 )
 from app.models.entities import AiDecision
 from app.core.tenant_context import require_tenant_id
-from app.services import ai_chat, ai_dispatch, ai_memory
+from app.services import ai_chat, ai_dispatch, ai_memory, ai_vision, ai_providers
 from app.services.tenant_admin import require_tenant_mutation_allowed
 from app.services.local_proxy_connector import (
     LocalProxyConnectorError,
@@ -327,7 +327,7 @@ async def tenant_subscription_page(request: Request):
         db.close()
 
 
-def _ai_page_response(request: Request, db, *, notice: str = "", tone: str = ""):
+def _ai_page_response(request: Request, db, *, notice: str = "", tone: str = "", form_values: dict | None = None):
     """渲染 AI 设置页：配置、今日用量和最近的决策记录放在同一页。"""
 
     setting = ai_dispatch.get_ai_setting(db)
@@ -340,8 +340,8 @@ def _ai_page_response(request: Request, db, *, notice: str = "", tone: str = "")
         page_title="AI 助手",
         notice=notice,
         notice_tone=tone,
-        setting=setting,
-        key_configured=bool(setting and setting.api_key_encrypted),
+        setting=form_values if form_values is not None else setting,
+        ai_catalog=ai_providers.public_catalog(db),
         ready=ai_dispatch.is_ai_ready(setting),
         used_today=ai_dispatch.used_today(db),
         decisions=decisions,
@@ -369,11 +369,17 @@ async def tenant_ai_page(request: Request):
 async def tenant_ai_save_action(
     request: Request,
     enabled: str = Form(""),
-    api_base: str = Form(""),
+    provider_id: str = Form(""),
     model: str = Form(""),
-    api_key: str = Form(""),
     chat_enabled: str = Form(""),
     persona: str = Form(""),
+    vision_enabled: str = Form(""),
+    vision_provider_id: str = Form(""),
+    vision_model: str = Form(""),
+    image_enabled: str = Form(""),
+    image_provider_id: str = Form(""),
+    image_model: str = Form(""),
+    image_daily_limit: str = Form("20"),
     action: str = Form("save"),
     csrf_token: str = Form(""),
 ):
@@ -389,18 +395,31 @@ async def tenant_ai_save_action(
             if removed is None:
                 return _redirect("/tenant/ai", "记忆服务未配置或暂时连不上，没有清空", danger=True)
             return _redirect("/tenant/ai", f"已清空 {removed} 个记忆库")
-        setting = ai_dispatch.save_ai_setting(
-            db,
-            enabled=enabled == "on",
-            api_base=api_base,
-            model=model,
-            api_key=api_key,
-            chat_enabled=chat_enabled == "on",
-            persona=persona,
-        )
+        values = {
+            "enabled": enabled == "on", "provider_id": provider_id, "model": model,
+            "chat_enabled": chat_enabled == "on", "persona": persona,
+            "vision_enabled": vision_enabled == "on", "vision_provider_id": vision_provider_id,
+            "vision_model": vision_model,
+            "image_enabled": image_enabled == "on", "image_provider_id": image_provider_id,
+            "image_model": image_model, "image_daily_limit": image_daily_limit,
+        }
+        try:
+            setting = ai_dispatch.save_ai_setting(db, **values)
+        except ValueError as exc:
+            db.rollback()
+            return _ai_page_response(request, db, notice=str(exc), tone="danger", form_values=values)
         db.commit()
         if action == "test":
-            ok, message = ai_dispatch.test_connection(ai_dispatch.snapshot_setting(setting))
+            if not ai_dispatch.is_ai_ready(setting):
+                return _redirect("/tenant/ai", "请先启用 AI 助手并选择可用的对话供应商和模型", danger=True)
+            config = ai_dispatch.snapshot_setting(setting)
+            db.close()
+            ok, message = ai_dispatch.test_connection(config)
+            return _redirect("/tenant/ai", message, danger=not ok)
+        if action == "test_vision":
+            config = ai_vision.snapshot_setting(setting)
+            db.close()
+            ok, message = ai_vision.test_connection(config)
             return _redirect("/tenant/ai", message, danger=not ok)
         return _redirect("/tenant/ai", "AI 设置已保存")
     finally:
