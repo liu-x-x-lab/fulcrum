@@ -7,7 +7,10 @@
   <nav class="msg-kind-tabs" aria-label="会话类型">
     {% for tab in kind_tabs %}<a class="msg-kind-tab{% if tab.active %} active{% endif %}" href="{{ tab.href }}{% if return_to %}{{ '&' if '?' in tab.href else '?' }}return_to={{ return_to|urlencode }}{% endif %}"{% if tab.active %} aria-current="page"{% endif %} title="{{ tab.label }}"><span class="i i-{{ tab.icon }}" aria-hidden="true"></span><span>{{ tab.label }}</span></a>{% endfor %}
   </nav>
-  {% if selected_total is not none %}<span class="chip chip-outline">消息 {{ selected_total }}</span>{% endif %}
+  {% if selected_conversation_id %}
+  <span id="message-count-status" role="status"></span>
+  <button class="btn btn-small btn-secondary" type="button" id="message-count-button">查看消息总数</button>
+  {% endif %}
 </div>
 {% endblock %}
 {% block content %}

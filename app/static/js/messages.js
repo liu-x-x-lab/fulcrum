@@ -111,9 +111,9 @@
   function toBottom() { body.scrollTop = body.scrollHeight; }
 
   // 断网时结束请求，防止一个挂起请求阻塞后续轮询。
-  async function request(url, options) {
+  async function request(url, options, timeoutMs) {
     var controller = new AbortController();
-    var timeout = setTimeout(function () { controller.abort(); }, 20000);
+    var timeout = setTimeout(function () { controller.abort(); }, timeoutMs || 20000);
     try {
       var response = await fetch(url, Object.assign({ credentials: "same-origin", headers: { Accept: "application/json" }, signal: controller.signal }, options));
       var data = await response.json().catch(function () { return {}; });
@@ -121,6 +121,22 @@
       return data;
     } finally { clearTimeout(timeout); }
   }
+  var countButton = document.getElementById("message-count-button");
+  var countStatus = document.getElementById("message-count-status");
+  if (countButton && countStatus) countButton.addEventListener("click", async function () {
+    if (countButton.disabled) return;
+    countButton.disabled = true;
+    countStatus.textContent = "正在统计…";
+    try {
+      var data = await request("/messages/count?conversation_id=" + encodeURIComponent(conversationId), { cache: "no-store" }, 120000);
+      if (!Number.isSafeInteger(data.total) || data.total < 0) throw new Error();
+      countStatus.textContent = "本次统计：" + data.total + " 条";
+      countButton.textContent = "重新统计";
+    } catch (_error) {
+      countStatus.textContent = "统计未完成";
+      countButton.textContent = "重试统计";
+    } finally { countButton.disabled = false; }
+  });
   function fetchRows(params) {
     return request("/messages/history?" + new URLSearchParams(Object.assign({ conversation_id: conversationId }, params)).toString());
   }

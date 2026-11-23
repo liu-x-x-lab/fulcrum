@@ -495,6 +495,22 @@ async def message_conversations(request: Request, bot_id: int = 0, channel_id: i
         db.close()
 
 
+@router.get("/messages/count")
+def message_count(request: Request, conversation_id: int):
+    # 精确统计可能很慢。同步路由在线程池执行，避免阻塞聊天轮询。
+    enforce_role(request, "readonly")
+    db = get_session()
+    try:
+        if db.get(Conversation, conversation_id) is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        total = db.scalar(select(func.count(Message.id)).where(
+            Message.conversation_id == conversation_id, Message.status != "echo",
+        ))
+        return JSONResponse({"total": int(total)}, headers={"Cache-Control": "private, no-store"})
+    finally:
+        db.close()
+
+
 @router.get("/messages", response_class=HTMLResponse)
 async def messages_page(
     request: Request,
@@ -512,11 +528,8 @@ async def messages_page(
         if conversation_id:
             stages.append(("recent_messages_ms", perf_counter()))
             page = load_conversation_messages(db, conversation_id)
-            stages.append(("message_count_ms", perf_counter()))
-            selected_total = int(db.scalar(select(func.count(Message.id)).where(Message.conversation_id == conversation_id, Message.status != "echo")) or 0)
         else:
             page = {"messages": [], "has_more": False, "identities": {}, "attachments": {}, "views": {}}
-            selected_total = None
         # 选中群会话时,找到对应的群记录,线程头据此提供“群设置”入口。
         stages.append(("thread_header_ms", perf_counter()))
         selected_chatroom = None
@@ -537,7 +550,6 @@ async def messages_page(
             message_identities=page["identities"],
             message_views=page["views"],
             has_more_messages=page["has_more"],
-            selected_total=selected_total,
             conversation_summaries=conversation_summaries,
             selected_conversation_id=conversation_id,
             selected_chatroom=selected_chatroom,

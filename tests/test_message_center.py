@@ -51,31 +51,35 @@ def _rows(payload: dict) -> list[int]:
 
 # ---------- 页面 ----------
 
-def test_slow_page_attributes_time_to_the_count_query(seeded, monkeypatch, caplog) -> None:
+def test_message_count_is_manual_and_reads_fresh_visible_rows(seeded) -> None:
     client, ids, conversation_id, _message_ids, _csrf = seeded
-    clock = 0.0
-    delay = 0.5
-    monkeypatch.setattr(message_routes, "perf_counter", lambda: clock)
     engine = ids["factory"].kw["bind"]
+    counts = []
 
-    def charge_count_time(conn, cursor, statement, parameters, context, executemany):
-        nonlocal clock
+    def record_count(conn, cursor, statement, parameters, context, executemany):
         if "count(messages.id)" in statement.lower():
-            clock += delay
+            counts.append(statement)
 
-    event.listen(engine, "after_cursor_execute", charge_count_time)
+    event.listen(engine, "after_cursor_execute", record_count)
     try:
-        url = f"/messages?conversation_id={conversation_id}"
-        assert client.get(url).status_code == 200
-        assert not any(r.msg == "slow messages page" for r in caplog.records)
-        delay = 1.5
-        assert client.get(url).status_code == 200
+        assert 'id="message-count-button"' not in client.get("/messages").text
+        assert 'id="message-count-button"' in client.get(f"/messages?conversation_id={conversation_id}").text
+        assert not counts
+        url = f"/messages/count?conversation_id={conversation_id}"
+        response = client.get(url)
+        assert response.json() == {"total": TOTAL}
+        assert "no-store" in response.headers["cache-control"]
+        with ids["factory"]() as db:
+            for status in ("sent", "echo"):
+                db.add(Message(tenant_id=ids["alpha"], conversation_id=conversation_id, direction="in", sender_id="u1", message_type="text", content="新增消息", status=status))
+            db.commit()
+        assert client.get(url).json() == {"total": TOTAL + 1}
+        assert len(counts) == 2
+        assert client.get("/messages/count?conversation_id=999999").status_code == 404
+        client.cookies.clear()
+        assert client.get(url).status_code in {303, 401}
     finally:
-        event.remove(engine, "after_cursor_execute", charge_count_time)
-    record, = [r for r in caplog.records if r.msg == "slow messages page"]
-    assert record.levelname == "WARNING"
-    assert record.duration_ms == record.message_count_ms == 1500
-    assert record.summaries_ms == record.recent_messages_ms == record.render_ms == 0
+        event.remove(engine, "after_cursor_execute", record_count)
 
 
 def test_page_has_no_intro_copy_or_page_numbers_and_loads_only_the_latest(seeded) -> None:
