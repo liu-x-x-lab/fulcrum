@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.web.messages.routes as message_routes
-from app.models.entities import Chatroom, ChatroomMember, Conversation, Message
+from app.models.entities import Channel, Chatroom, ChatroomMember, Conversation, Message
 from test_provider_node_pages import _login, provider_page_context  # noqa: F401  (provider_page_context 是 fixture)
 
 TOTAL = 75
@@ -65,6 +65,32 @@ def test_page_has_no_intro_copy_or_page_numbers_and_loads_only_the_latest(seeded
     assert 'id="wechat-composer"' in page.text and "<textarea" in page.text and 'action="/messages/send"' not in page.text
     # 发送失败的出站消息在对话里有标记
     assert "发送失败" in page.text
+
+
+def test_inbox_scopes_conversations_to_each_account(seeded):
+    client, ids, first, _message_ids, _csrf = seeded
+    channel = ids["channel_id"]
+    with ids["factory"]() as db:
+        other = Channel(tenant_id=ids["alpha"], bot_id=ids["bot"], name="第二账号", channel_type="wechat_ipad")
+        db.add(other)
+        db.flush()
+        room = Conversation(tenant_id=ids["alpha"], bot_id=ids["bot"], channel_id=other.id, channel_type="wechat_ipad",
+                            external_id="room@chatroom", chat_type="group", title="测试群")
+        db.add(room)
+        db.flush()
+        db.add(Message(tenant_id=ids["alpha"], conversation_id=room.id, direction="in", sender_id="friend", content="第二账号的消息"))
+        db.commit()
+        second, other_channel = room.id, other.id
+
+    def conversation_ids(account):
+        result = client.get("/messages/conversations", params={"channel_id": account}).json()
+        return [row["id"] for row in result["conversations"]]
+
+    assert conversation_ids(channel) == [first]
+    assert conversation_ids(other_channel) == [second]
+    assert client.get(f"/messages?channel_id={other_channel}&conversation_id={first}").status_code == 404
+    page = client.get(f"/messages?conversation_id={second}").text
+    assert "第二账号的消息" in page and "未读消息" not in page and "全部消息" not in page
 
 
 def test_short_conversation_has_nothing_more_to_load(seeded) -> None:

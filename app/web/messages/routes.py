@@ -9,11 +9,11 @@ import re
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.time import format_conversation_time, now_shanghai
-from app.models.entities import Bot, Channel, Chatroom, Conversation, Message, MessageAttachment
+from app.models.entities import Channel, Chatroom, Conversation, Message, MessageAttachment
 from app.services import message_actions, message_media, message_mentions, message_view
 from app.services.channel_adapters import dispatch_outbound_message
 from app.services.conversation_kinds import (
@@ -32,6 +32,7 @@ from app.services.outbound_files import (
     sanitize_upload_filename,
     store_outbound_upload,
 )
+from app.web.messages import inbox
 from app.web.auth_common import require_tenant_csrf
 from app.services.wechat_ipad.files import delivery_name
 from app.services.wechat_ipad import stickers
@@ -403,29 +404,12 @@ async def revoke_manual_message(request: Request, conversation_id: int = Form(..
         db.close()
 
 
-def _message_conversation_summaries(db: Session, *, bot_id: int = 0, channel_id: int = 0, chat_type: str = "") -> list[dict[str, Any]]:
-    """整页和自动刷新共用会话筛选、身份解析及摘要。"""
-
-    # 会话类型三分:群聊 / 私聊 / 公众号(公众号不再混在私聊里),判断规则见 conversation_kinds
-    normalized_chat_type = normalize_kind(chat_type)
-
-    # 已删除的账号/机器人(逻辑删除)的会话不再出现在列表里,聊天数据本身保留。
-    conversations_stmt = select(Conversation).where(
-        Conversation.bot_id.in_(select(Bot.id).where(Bot.deleted_at.is_(None))),
-        or_(Conversation.channel_id.is_(None), Conversation.channel_id.in_(select(Channel.id).where(Channel.deleted_at.is_(None)))),
-    )
-    if bot_id:
-        conversations_stmt = conversations_stmt.where(Conversation.bot_id == bot_id)
-    if channel_id:
-        conversations_stmt = conversations_stmt.where(Conversation.channel_id == channel_id)
-    conversations_stmt = apply_kind_filter(conversations_stmt, normalized_chat_type)
-    conversations = db.scalars(
-        conversations_stmt.order_by(
-            Conversation.last_message_at.is_(None),
-            Conversation.last_message_at.desc(),
-            Conversation.id.desc(),
-        ).limit(100)
-    ).all()
+def _message_conversation_summaries(db: Session, scope, *, selected_id=0):
+    if selected_id:
+        scope = scope.where(Conversation.id == selected_id)
+    conversations = db.scalars(scope.order_by(
+        Conversation.last_message_at.is_(None), Conversation.last_message_at.desc(), Conversation.id.desc(),
+    ).limit(100)).all()
     # 专用目录确认的非 gh_ 公众号也需要显示类型徽标；按当前页批量查询，避免逐条读取联系人。
     official_ids = set(db.scalars(apply_kind_filter(
         select(Conversation.id).where(Conversation.id.in_([item.id for item in conversations])), "official",
@@ -474,7 +458,9 @@ async def message_conversations(request: Request, bot_id: int = 0, channel_id: i
     enforce_role(request, "readonly")
     db = get_session()
     try:
-        summaries = _message_conversation_summaries(db, bot_id=bot_id, channel_id=channel_id, chat_type=chat_type)
+        _, channel_id = inbox.account_scope(db, bot_id, channel_id, include_accounts=False)
+        scope = inbox.inbox_query(bot_id, channel_id, normalize_kind(chat_type))
+        summaries = _message_conversation_summaries(db, scope)
         items = []
         for row in summaries:
             latest = row["latest"]
@@ -498,9 +484,12 @@ async def messages_page(
     chat_type: str = "",
     conversation_id: int = 0,
 ):
+    enforce_role(request, "readonly")
     db = get_session()
     try:
-        conversation_summaries = _message_conversation_summaries(db, bot_id=bot_id, channel_id=channel_id, chat_type=chat_type)
+        accounts, channel_id = inbox.account_scope(db, bot_id, channel_id, conversation_id)
+        scope = inbox.inbox_query(bot_id, channel_id, normalize_kind(chat_type))
+        conversation_summaries = _message_conversation_summaries(db, scope)
 
         # 只有选中了会话才读消息;没有分页,更早的消息由页面向上滚动时通过 /messages/history 继续加载。
         page = load_conversation_messages(db, conversation_id) if conversation_id else {"messages": [], "has_more": False, "identities": {}, "attachments": {}, "views": {}}
@@ -508,6 +497,9 @@ async def messages_page(
         # 选中群会话时,找到对应的群记录,线程头据此提供“群设置”入口。
         selected_chatroom = None
         selected_summary = next((row for row in conversation_summaries if int(row["conversation"].id) == conversation_id), None)
+        if conversation_id and not selected_summary:
+            selected_scope = inbox.inbox_query(bot_id, channel_id, "")
+            selected_summary = next(iter(_message_conversation_summaries(db, selected_scope, selected_id=conversation_id)), None)
         if selected_summary and selected_summary["conversation"].chat_type == "group":
             selected_chatroom = db.scalar(
                 select(Chatroom).where(
@@ -526,7 +518,8 @@ async def messages_page(
             selected_total=selected_total,
             conversation_summaries=conversation_summaries,
             selected_conversation_id=conversation_id,
-            selected_chatroom=selected_chatroom,
+            selected_chatroom=selected_chatroom, selected_summary=selected_summary,
+            inbox_accounts=accounts,
             back_href=safe_return_to(request.query_params.get("return_to"), ""),
             bot_id=bot_id,
             channel_id=channel_id,
