@@ -6,6 +6,7 @@ import re
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 import app.web.messages.routes as message_routes
 from app.models.entities import Chatroom, ChatroomMember, Conversation, Message
@@ -49,6 +50,33 @@ def _rows(payload: dict) -> list[int]:
 
 
 # ---------- 页面 ----------
+
+def test_slow_page_attributes_time_to_the_count_query(seeded, monkeypatch, caplog) -> None:
+    client, ids, conversation_id, _message_ids, _csrf = seeded
+    clock = 0.0
+    delay = 0.5
+    monkeypatch.setattr(message_routes, "perf_counter", lambda: clock)
+    engine = ids["factory"].kw["bind"]
+
+    def charge_count_time(conn, cursor, statement, parameters, context, executemany):
+        nonlocal clock
+        if "count(messages.id)" in statement.lower():
+            clock += delay
+
+    event.listen(engine, "after_cursor_execute", charge_count_time)
+    try:
+        url = f"/messages?conversation_id={conversation_id}"
+        assert client.get(url).status_code == 200
+        assert not any(r.msg == "slow messages page" for r in caplog.records)
+        delay = 1.5
+        assert client.get(url).status_code == 200
+    finally:
+        event.remove(engine, "after_cursor_execute", charge_count_time)
+    record, = [r for r in caplog.records if r.msg == "slow messages page"]
+    assert record.levelname == "WARNING"
+    assert record.duration_ms == record.message_count_ms == 1500
+    assert record.summaries_ms == record.recent_messages_ms == record.render_ms == 0
+
 
 def test_page_has_no_intro_copy_or_page_numbers_and_loads_only_the_latest(seeded) -> None:
     client, _ids, conversation_id, message_ids, _csrf = seeded
