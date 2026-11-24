@@ -1,10 +1,13 @@
 """消息会话、历史、附件和手动发送入口。"""
 
+from itertools import pairwise
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 from urllib.parse import quote, urlencode
 import base64
 import json
+import logging
 import re
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
@@ -43,6 +46,8 @@ from app.web.shared.urls import safe_return_to
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+SLOW_MESSAGE_PAGE_SECONDS = 1.0
 
 
 # 消息中心单条发送内容的长度上限(微信文本消息本身有上限,这里取一个稳妥值)。
@@ -490,6 +495,22 @@ async def message_conversations(request: Request, bot_id: int = 0, channel_id: i
         db.close()
 
 
+@router.get("/messages/count")
+def message_count(request: Request, conversation_id: int):
+    # 精确统计可能很慢。同步路由在线程池执行，避免阻塞聊天轮询。
+    enforce_role(request, "readonly")
+    db = get_session()
+    try:
+        if db.get(Conversation, conversation_id) is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        total = db.scalar(select(func.count(Message.id)).where(
+            Message.conversation_id == conversation_id, Message.status != "echo",
+        ))
+        return JSONResponse({"total": int(total)}, headers={"Cache-Control": "private, no-store"})
+    finally:
+        db.close()
+
+
 @router.get("/messages", response_class=HTMLResponse)
 async def messages_page(
     request: Request,
@@ -499,13 +520,18 @@ async def messages_page(
     conversation_id: int = 0,
 ):
     db = get_session()
+    stages = [("summaries_ms", perf_counter())]
     try:
         conversation_summaries = _message_conversation_summaries(db, bot_id=bot_id, channel_id=channel_id, chat_type=chat_type)
 
         # 只有选中了会话才读消息;没有分页,更早的消息由页面向上滚动时通过 /messages/history 继续加载。
-        page = load_conversation_messages(db, conversation_id) if conversation_id else {"messages": [], "has_more": False, "identities": {}, "attachments": {}, "views": {}}
-        selected_total = int(db.scalar(select(func.count(Message.id)).where(Message.conversation_id == conversation_id, Message.status != "echo")) or 0) if conversation_id else None
+        if conversation_id:
+            stages.append(("recent_messages_ms", perf_counter()))
+            page = load_conversation_messages(db, conversation_id)
+        else:
+            page = {"messages": [], "has_more": False, "identities": {}, "attachments": {}, "views": {}}
         # 选中群会话时,找到对应的群记录,线程头据此提供“群设置”入口。
+        stages.append(("thread_header_ms", perf_counter()))
         selected_chatroom = None
         selected_summary = next((row for row in conversation_summaries if int(row["conversation"].id) == conversation_id), None)
         if selected_summary and selected_summary["conversation"].chat_type == "group":
@@ -515,6 +541,7 @@ async def messages_page(
                     Chatroom.external_id == selected_summary["conversation"].external_id,
                 )
             )
+        stages.append(("render_ms", perf_counter()))
         return render(
             request,
             "messages.html",
@@ -523,7 +550,6 @@ async def messages_page(
             message_identities=page["identities"],
             message_views=page["views"],
             has_more_messages=page["has_more"],
-            selected_total=selected_total,
             conversation_summaries=conversation_summaries,
             selected_conversation_id=conversation_id,
             selected_chatroom=selected_chatroom,
@@ -536,4 +562,12 @@ async def messages_page(
             selected_kind=selected_summary["kind"] if selected_summary else "",
         )
     finally:
+        stages.append(("session_close_ms", perf_counter()))
         db.close()
+        finished = perf_counter()
+        elapsed = finished - stages[0][1]
+        if elapsed >= SLOW_MESSAGE_PAGE_SECONDS:
+            # 只记录实际执行阶段的耗时，不写会话标识、查询参数或消息内容。
+            stages.append(("end", finished))
+            timings = {name: round((end - start) * 1000, 2) for (name, start), (_, end) in pairwise(stages)}
+            logger.warning("slow messages page", extra={"duration_ms": round(elapsed * 1000, 2), **timings})
