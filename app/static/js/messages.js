@@ -32,6 +32,26 @@
   // 会话列表独立刷新；尚未选择会话或暂无会话时，也能带出新收到的消息。
   var conversations = center.querySelector(".wechat-conversation-list");
   var listTimer = null, listRequest = null;
+  var search = document.getElementById("wechat-conversation-search");
+  var emptyList = conversations.querySelector(".wechat-empty");
+  function filterConversations() {
+    var query = search.value.trim().toLocaleLowerCase();
+    var matches = 0;
+    conversations.querySelectorAll(".wechat-conversation-item").forEach(function (link) {
+      var name = link.querySelector(".wechat-conversation-name").textContent;
+      link.hidden = !name.toLocaleLowerCase().includes(query);
+      if (!link.hidden) matches++;
+    });
+    emptyList.hidden = matches > 0;
+    var message = query ? "没有匹配的会话" : "暂无会话消息";
+    if (emptyList.textContent !== message) emptyList.textContent = message;
+  }
+  search.closest("label").hidden = false;
+  search.addEventListener("input", function () {
+    filterConversations();
+    conversations.scrollTop = 0;
+  });
+  filterConversations();
   function conversationFilters() {
     var query = new URLSearchParams();
     if (center.dataset.botId) query.set("bot_id", center.dataset.botId);
@@ -62,6 +82,8 @@
         if (returnTo) query.set("return_to", returnTo);
         link.href = "/messages?" + query.toString();
         link.classList.toggle("active", id === conversationId);
+        if (id === conversationId) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
         var nameEl = link.querySelector(".wechat-conversation-name");
         nameEl.textContent = item.display_name;
         if (item.kind === "official") {
@@ -87,9 +109,7 @@
         position += 1;
       });
       conversations.querySelectorAll(".wechat-conversation-item").forEach(function (link) { if (!seen.has(link.dataset.conversationId)) link.remove(); });
-      var empty = conversations.querySelector(".wechat-empty");
-      if (empty && seen.size) empty.remove();
-      if (!empty && !seen.size) { empty = document.createElement("div"); empty.className = "wechat-empty"; empty.textContent = "暂无会话消息"; conversations.appendChild(empty); }
+      filterConversations();
       conversations.scrollTop = top;
     }).finally(function () { listRequest = null; });
     return listRequest;
