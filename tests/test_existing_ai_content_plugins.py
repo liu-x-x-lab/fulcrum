@@ -1469,3 +1469,77 @@ def test_douyu_scheduled_poll_uses_tenant_session_and_generic_text(douyu_schedul
         )
         assert room_state is not None
         assert json.loads(room_state.payload_json)["provider_status"] == "live"
+
+
+def test_douyu_scheduled_poll_sends_live_link_card_on_wechat_channels_and_text_on_offline(
+    douyu_schedule_fixture,
+) -> None:
+    """支持卡片的微信系渠道在开播时同时发送文本提醒与链接卡片，下播仅发文本提醒。"""
+
+    factory, identity = douyu_schedule_fixture
+    loaded = load_directory_plugin("douyu", force=True)
+    assert loaded is not None and loaded.instance is not None
+    module = loaded.instance._module
+    assert module._load_config({}).poll_interval_seconds == 30
+
+    with tenant_scope(identity["tenant_id"]), tenant_session(factory) as db:
+        binding = db.get(BotPlugin, identity["binding_id"])
+        conversation = db.get(Conversation, identity["conversation_id"])
+        assert binding is not None and conversation is not None
+        channel = db.get(Channel, conversation.channel_id)
+        assert channel is not None
+        channel.channel_type = "wechat_webridge"
+        conversation.channel_type = "wechat_webridge"
+        db.flush()
+
+        request = PluginExecutionRequest(
+            action="poll_subscriptions",
+            config=json.loads(binding.config_json or "{}"),
+            payload={},
+            context=PluginExecutionContext(
+                tenant_id=identity["tenant_id"],
+                binding_id=identity["binding_id"],
+                bot_id=identity["bot_id"],
+            ),
+        )
+        live_room = {
+            "provider_status": "live",
+            "room_id": "100",
+            "nickname": "主播甲",
+            "room_name": "开心直播",
+            "room_url": "https://www.douyu.com/100",
+            "thumb_url": "https://img.example.test/avatar.jpg",
+        }
+        with patch.object(module, "_fetch_room_status_output", return_value=live_room):
+            live_result = module.execute_scheduled_action(db, request)
+
+        assert live_result.ok is True
+        jobs = db.scalars(select(TaskJob).order_by(TaskJob.id.asc())).all()
+        assert len(jobs) == 2
+        first_payload = json.loads(jobs[0].payload_json)["payload"]
+        second_payload = json.loads(jobs[1].payload_json)["payload"]
+        assert first_payload["message_type"] == "text"
+        assert "斗鱼开播提醒" in first_payload["content"]
+        assert second_payload["message_type"] == "link"
+        assert second_payload["link_url"] == "https://www.douyu.com/100"
+        assert second_payload["link_title"] == "开心直播"
+        assert second_payload["link_description"] == "主播甲 正在斗鱼直播"
+        assert second_payload["thumb_url"] == "https://img.example.test/avatar.jpg"
+
+        offline_room = {
+            "provider_status": "offline",
+            "room_id": "100",
+            "nickname": "主播甲",
+            "room_name": "开心直播",
+            "room_url": "https://www.douyu.com/100",
+            "thumb_url": "https://img.example.test/avatar.jpg",
+        }
+        with patch.object(module, "_fetch_room_status_output", return_value=offline_room):
+            offline_result = module.execute_scheduled_action(db, request)
+
+        assert offline_result.ok is True
+        jobs_after_offline = db.scalars(select(TaskJob).order_by(TaskJob.id.asc())).all()
+        assert len(jobs_after_offline) == 3
+        offline_payload = json.loads(jobs_after_offline[2].payload_json)["payload"]
+        assert offline_payload["message_type"] == "text"
+        assert "斗鱼下播提醒" in offline_payload["content"]
