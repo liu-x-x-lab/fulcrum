@@ -1,6 +1,6 @@
 import unittest
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.db import Base
@@ -9,7 +9,13 @@ from app.core.tenant_db import tenant_session
 from app.models.entities import Bot, Channel
 from app.core.time import now_shanghai
 from app.models.saas import SaasPlan, Tenant, TenantSubscription
-from app.services.open_api_apps import OpenApiAppInput, list_authorized_channel_ids, upsert_open_api_app
+from app.services.open_api_apps import (
+    OpenApiAppError,
+    OpenApiAppInput,
+    list_authorized_channel_ids,
+    require_active_open_api_subscription,
+    upsert_open_api_app,
+)
 
 
 class OpenApiAppsTestCase(unittest.TestCase):
@@ -68,6 +74,16 @@ class OpenApiAppsTestCase(unittest.TestCase):
         self.tenant_scope_context.__exit__(None, None, None)
         Base.metadata.drop_all(bind=self.engine)
         self.engine.dispose()
+
+    def test_open_api_app_management_requires_an_active_subscription(self):
+        require_active_open_api_subscription(self.db)
+
+        subscription = self.db.scalar(select(TenantSubscription).where(TenantSubscription.tenant_id == self.tenant_id))
+        self.assertIsNotNone(subscription)
+        subscription.status = "expired"
+        self.db.commit()
+        with self.assertRaises(OpenApiAppError):
+            require_active_open_api_subscription(self.db)
 
     def test_upsert_open_api_app_creates_and_preserves_secret_on_blank_update(self):
         app = upsert_open_api_app(

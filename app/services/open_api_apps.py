@@ -49,7 +49,7 @@ def list_open_api_apps(db: Session) -> list[OpenApiApp]:
 def require_active_open_api_subscription(db: Session) -> None:
     """只有有效订阅租户可以创建或修改开放应用。"""
 
-    subscription = get_current_subscription(db, tenant_id=require_tenant_id())
+    subscription = get_current_subscription(db, tenant_id=_require_tenant_id())
     if not subscription_is_active(subscription):
         raise OpenApiAppError("subscription_required")
 
