@@ -448,3 +448,72 @@ def test_welcome_card_without_avatar_variable_does_not_query_identity(env, sent,
     apply_event(env.db, env.channel, event, env.conversation)
     dispatch_group_features(env.db, env.channel, event, conversation_id=env.conversation.id)
     assert sent[0]["replies"][1]["thumb_url"] == "https://example.com/cover.jpg"
+
+
+def test_join_can_send_card_without_text(env, sent):
+    """入群发送形式可独立关闭文字，只发欢迎卡片。"""
+
+    save_state(env.room, "member_change", enabled=True, config={
+        "join_text_enabled": False,
+        "card_enabled": True,
+        "card_title": "欢迎 {nickname}",
+        "card_desc": "请阅读群规",
+        "card_url": "https://example.com/rules",
+    })
+    event = _join_event()
+    apply_event(env.db, env.channel, event, env.conversation)
+    assert dispatch_group_features(env.db, env.channel, event, conversation_id=env.conversation.id) == ["member_change"]
+    assert sent[0]["replies"] == [{
+        "type": "link", "url": "https://example.com/rules",
+        "title": "欢迎 小明", "description": "请阅读群规",
+    }]
+
+
+def test_leave_can_send_card_only_with_avatar_and_shared_url(env, sent):
+    """离群发送形式可关闭文字，只发卡片；离群地址留空时沿用入群卡片地址。"""
+
+    avatar = "https://wx.qlogo.cn/mmhead/leave-member/132"
+    env.db.add(ChatroomMember(
+        tenant_id=1, bot_id=1, channel_id=env.channel.id, chatroom_id=env.room.id,
+        member_external_id="wxid_a", nickname="小明", display_name="小明", status="active",
+        extra_json=json.dumps({"avatar_url": avatar}),
+    ))
+    env.db.flush()
+    save_state(env.room, "member_change", enabled=True, config={
+        "leave_text_enabled": False,
+        "leave_card_enabled": True,
+        "leave_card_title": "再见 {nickname}",
+        "leave_card_desc": "{action}{group_name} · {now}",
+        "leave_card_url": "",
+        "card_url": "https://example.com/rules",
+        "leave_card_thumb_source": "member_avatar",
+    })
+    event = _join_event()
+    event["message"]["message_type"] = "group_member_leave"
+    event["details"]["member_change"]["change_type"] = "left"
+    apply_event(env.db, env.channel, event, env.conversation)
+    assert dispatch_group_features(env.db, env.channel, event, conversation_id=env.conversation.id) == ["member_change"]
+    replies = sent[0]["replies"]
+    assert len(replies) == 1 and replies[0]["type"] == "link"
+    assert replies[0]["url"] == "https://example.com/rules"
+    assert replies[0]["title"] == "再见 小明"
+    assert replies[0]["description"].startswith("离开了群 · ")
+    assert replies[0]["thumb_url"] == avatar
+
+
+def test_removed_member_card_uses_removed_action(env, sent):
+    """被移出使用“被移出了”的卡片动作，和主动退群区分。"""
+
+    save_state(env.room, "member_change", enabled=True, config={
+        "leave_text_enabled": False,
+        "leave_card_enabled": True,
+        "leave_card_title": "{nickname} {action}群聊",
+        "leave_card_url": "https://example.com/rules",
+        "leave_card_thumb_source": "url",
+    })
+    event = _join_event()
+    event["message"]["message_type"] = "group_member_leave"
+    event["details"]["member_change"]["change_type"] = "removed"
+    apply_event(env.db, env.channel, event, env.conversation)
+    assert dispatch_group_features(env.db, env.channel, event, conversation_id=env.conversation.id) == ["member_change"]
+    assert sent[0]["replies"][0]["title"] == "小明 被移出了群聊"

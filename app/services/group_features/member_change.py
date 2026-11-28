@@ -34,6 +34,7 @@ WELCOME_AVATAR_RECHECK = timedelta(seconds=1)
 # 文字通知和欢迎卡片共用单次匹配，只替换各自上下文提供的变量。
 # 不递归解释昵称或群名中的花括号，未声明变量保留给用户检查。
 WELCOME_TEMPLATE_FIELDS = ("card_title", "card_desc", "card_url", "card_thumb_url")
+LEAVE_TEMPLATE_FIELDS = ("leave_card_title", "leave_card_desc", "leave_card_url", "leave_card_thumb_url")
 TEMPLATE_VARIABLE = re.compile(r"\{([a-z_]+)\}")
 NOTIFICATION_VARIABLE_HINT = "可用变量：{nickname} 用户昵称、{group_name} 群名称、{now} 当前时间"
 
@@ -68,31 +69,35 @@ FEATURE = register(
     GroupFeature(
         key="member_change",
         name="群成员变更提醒",
-        description="成员加入、退出、改群昵称时在群里通知，可按群自定义文案，并向新成员发送欢迎卡片。",
+        description="成员加入、退出、改群昵称时在群里通知，入群和离群可分别选择文字或卡片形式，并可为新成员发送欢迎卡片。",
         event_types=("event", "system", "text", "group_member_join", "group_member_leave", "group_member_nickname_change"),
         fields=(
             ConfigField("notify_join", "新成员加入时通知", kind="bool", default=True, group="通知方式"),
             ConfigField("notify_leave", "成员退出或被移出时通知", kind="bool", default=True, group="通知方式"),
             ConfigField("notify_rename", "成员修改群昵称时通知", kind="bool", default=True, group="通知方式"),
+            ConfigField("join_text_enabled", "入群发送文字通知", kind="bool", default=True, group="发送形式", depends_on="notify_join"),
+            ConfigField("card_enabled", "入群发送欢迎卡片", kind="bool", default=False, group="发送形式", depends_on="notify_join"),
+            ConfigField("leave_text_enabled", "离群发送文字通知", kind="bool", default=True, group="发送形式", depends_on="notify_leave"),
+            ConfigField("leave_card_enabled", "离群发送卡片", kind="bool", default=False, group="发送形式", depends_on="notify_leave"),
             # 默认文案仅在声明中维护；群存储会补齐缺省值，生成通知时只使用本群生效配置。
-            # 正文分别依赖通知开关，空正文仅停发对应文字，不影响已开启的欢迎卡片。
+            # 正文分别依赖对应的发送形式开关；空正文仍不会发送孤立标题。
             ConfigField(
                 "notify_title", "通知标题", default="📋 群成员变动通知:", group="通知文案",
                 hint="留空不添加标题；" + NOTIFICATION_VARIABLE_HINT + "（标题中多人昵称用顿号连接）",
             ),
             ConfigField(
                 "join_template", "新成员加入文案", kind="textarea", default="🆕 成员新增: {nickname}",
-                group="通知文案", depends_on="notify_join",
-                hint="留空不发加入文字，仍可发送欢迎卡片；" + NOTIFICATION_VARIABLE_HINT,
+                group="通知文案", depends_on="join_text_enabled",
+                hint="留空不发加入文字；" + NOTIFICATION_VARIABLE_HINT,
             ),
             ConfigField(
                 "leave_template", "成员退出文案", kind="textarea", default="❌ 成员减少: {nickname}",
-                group="通知文案", depends_on="notify_leave",
+                group="通知文案", depends_on="leave_text_enabled",
                 hint="留空不发退出文字；" + NOTIFICATION_VARIABLE_HINT,
             ),
             ConfigField(
                 "removed_template", "成员被移出文案", kind="textarea", default="❌ 成员减少: {nickname}",
-                group="通知文案", depends_on="notify_leave",
+                group="通知文案", depends_on="leave_text_enabled",
                 hint="留空不发被移出文字；" + NOTIFICATION_VARIABLE_HINT,
             ),
             ConfigField(
@@ -100,24 +105,42 @@ FEATURE = register(
                 group="通知文案", depends_on="notify_rename",
                 hint="留空不发改昵称文字；" + NOTIFICATION_VARIABLE_HINT + "、{old_nickname} 原群昵称、{new_nickname} 新群昵称",
             ),
-            ConfigField("card_enabled", "新成员加入时发送欢迎卡片", kind="bool", default=False, group="欢迎卡片"),
             ConfigField(
-                "card_title", "卡片标题", default="欢迎 {nickname} 加入本群", group="欢迎卡片", depends_on="card_enabled",
+                "card_title", "卡片标题", default="欢迎 {nickname} 加入本群", group="入群卡片", depends_on="card_enabled",
                 hint="可用变量:{nickname} 新成员昵称,{now} 当前时间,{avatar_url} 新成员头像地址",
             ),
-            ConfigField("card_desc", "卡片描述", default="{now}", group="欢迎卡片", depends_on="card_enabled", hint="可用变量同上"),
+            ConfigField("card_desc", "卡片描述", default="{now}", group="入群卡片", depends_on="card_enabled", hint="可用变量同上"),
             ConfigField(
-                "card_url", "点击后打开的页面", group="欢迎卡片", depends_on="card_enabled",
-                hint="支持上述变量;替换后必须以 http:// 或 https:// 开头;群成员手机能打开才能点开",
+                "card_url", "点击后打开的页面", group="入群卡片", depends_on="card_enabled",
+                hint="必填，否则不会发送卡片；支持上述变量，替换后必须以 http:// 或 https:// 开头，群成员手机能打开才能点开",
             ),
             ConfigField(
-                "card_thumb_source", "缩略图来源", kind="select", default="url", group="欢迎卡片", depends_on="card_enabled",
+                "card_thumb_source", "缩略图来源", kind="select", default="url", group="入群卡片", depends_on="card_enabled",
                 options=(("url", "自定义图片 URL"), ("member_avatar", "新成员头像")),
                 hint="选择新成员头像后自动使用该新人的已同步微信头像，无需填写地址；未获取头像时不带缩略图",
             ),
             ConfigField(
-                "card_thumb_url", "自定义图片 URL", group="欢迎卡片", depends_on="card_enabled",
+                "card_thumb_url", "自定义图片 URL", group="入群卡片", depends_on="card_enabled",
                 show_when=("card_thumb_source", "url"),
+                hint="填写 http:// 或 https:// 图片直链，留空不显示图片；切换来源会保留已填地址",
+            ),
+            ConfigField(
+                "leave_card_title", "卡片标题", default="👋 {nickname} {action}群聊", group="离群卡片", depends_on="leave_card_enabled",
+                hint="可用变量:{nickname} 离群成员昵称,{action} 离开了/被移出了,{group_name} 群名称,{now} 当前时间,{avatar_url} 成员头像地址",
+            ),
+            ConfigField("leave_card_desc", "卡片描述", default="{now}", group="离群卡片", depends_on="leave_card_enabled", hint="可用变量同上"),
+            ConfigField(
+                "leave_card_url", "点击后打开的页面", group="离群卡片", depends_on="leave_card_enabled",
+                hint="留空沿用入群卡片的点击地址；两者都为空时不会发送卡片；必须以 http:// 或 https:// 开头",
+            ),
+            ConfigField(
+                "leave_card_thumb_source", "缩略图来源", kind="select", default="member_avatar", group="离群卡片", depends_on="leave_card_enabled",
+                options=(("member_avatar", "离群成员头像"), ("url", "自定义图片 URL")),
+                hint="默认使用离群成员的已同步微信头像；未获取头像时不带缩略图",
+            ),
+            ConfigField(
+                "leave_card_thumb_url", "自定义图片 URL", group="离群卡片", depends_on="leave_card_enabled",
+                show_when=("leave_card_thumb_source", "url"),
                 hint="填写 http:// 或 https:// 图片直链，留空不显示图片；切换来源会保留已填地址",
             ),
         ),
@@ -175,17 +198,31 @@ def handle(ctx: FeatureContext, args: str) -> list[dict[str, Any]] | None:
         return []
 
     replies: list[dict[str, Any]] = []
-    reply_text = build_reply_text(
-        change_type, members, config=ctx.config, group_name=ctx.chatroom.name or ctx.chatroom.external_id,
-        new_name=new_name, old_name=str(parsed.get("old_name") or ""), previous=previous,
+    send_text = change_type == "rename" or (
+        change_type == "join" and ctx.config.get("join_text_enabled")
+    ) or (
+        change_type in {"left", "removed"} and ctx.config.get("leave_text_enabled")
     )
-    if reply_text:
-        replies.append(text_reply(reply_text))
+    if send_text:
+        reply_text = build_reply_text(
+            change_type, members, config=ctx.config, group_name=ctx.chatroom.name or ctx.chatroom.external_id,
+            new_name=new_name, old_name=str(parsed.get("old_name") or ""), previous=previous,
+        )
+        if reply_text:
+            replies.append(text_reply(reply_text))
     if change_type == "join" and ctx.config.get("card_enabled"):
         card_members = members[:MAX_WELCOME_CARDS]
         if _welcome_uses_avatar(ctx.config):
             card_members = _welcome_member_profiles(ctx.db, ctx.channel, ctx.chatroom, card_members)
         replies.extend(build_welcome_cards(ctx.config, card_members))
+    elif change_type in {"left", "removed"} and ctx.config.get("leave_card_enabled"):
+        card_members = members[:MAX_WELCOME_CARDS]
+        if _leave_uses_avatar(ctx.config):
+            card_members = _welcome_member_profiles(ctx.db, ctx.channel, ctx.chatroom, card_members)
+        replies.extend(build_leave_cards(
+            ctx.config, card_members, change_type=change_type,
+            group_name=ctx.chatroom.name or ctx.chatroom.external_id,
+        ))
     return replies
 
 
@@ -194,6 +231,14 @@ def _welcome_uses_avatar(config: Mapping[str, Any]) -> bool:
 
     use_member_avatar = config.get("card_thumb_source") == "member_avatar"
     fields = WELCOME_TEMPLATE_FIELDS[:-1] if use_member_avatar else WELCOME_TEMPLATE_FIELDS
+    return use_member_avatar or any("{avatar_url}" in str(config.get(field) or "") for field in fields)
+
+
+def _leave_uses_avatar(config: Mapping[str, Any]) -> bool:
+    """离群卡片使用成员头像或模板变量时读取资料；不在离群事件上等待头像同步。"""
+
+    use_member_avatar = config.get("leave_card_thumb_source") == "member_avatar"
+    fields = LEAVE_TEMPLATE_FIELDS[:-1] if use_member_avatar else LEAVE_TEMPLATE_FIELDS
     return use_member_avatar or any("{avatar_url}" in str(config.get(field) or "") for field in fields)
 
 
@@ -317,6 +362,39 @@ def build_welcome_cards(config: Mapping[str, Any], members: list[dict[str, str]]
             )
         except PluginReplyError as exc:
             logger.warning("欢迎卡片配置无效,已跳过", extra={"reason": str(exc)})
+            break
+    return cards
+
+
+def build_leave_cards(
+    config: Mapping[str, Any], members: list[dict[str, str]], *, change_type: str, group_name: str = "",
+) -> list[dict[str, Any]]:
+    """为离群或被移出成员生成卡片;地址不合法时只记日志并跳过,不影响文字通知。"""
+
+    now_text = now_shanghai().strftime("%Y-%m-%d %H:%M")
+    action = "被移出了" if change_type == "removed" else "离开了"
+    url_template = config.get("leave_card_url") or config.get("card_url")
+    use_member_avatar = config.get("leave_card_thumb_source") == "member_avatar"
+    cards: list[dict[str, Any]] = []
+    for item in members[:MAX_WELCOME_CARDS]:
+        nickname = item.get("display_name") or item.get("external_id") or ""
+        avatar_url = _welcome_avatar_url(item.get("avatar_url"))
+        variables = {
+            "nickname": nickname, "now": now_text, "avatar_url": avatar_url, "action": action,
+            "group_name": group_name,
+        }
+        try:
+            thumb_url = avatar_url if use_member_avatar else _render_template(config.get("leave_card_thumb_url"), variables)
+            cards.append(
+                link_reply(
+                    url=_render_template(url_template, variables),
+                    title=_render_template(config.get("leave_card_title"), variables),
+                    description=_render_template(config.get("leave_card_desc"), variables),
+                    thumb_url=thumb_url,
+                )
+            )
+        except PluginReplyError as exc:
+            logger.warning("离群卡片配置无效,已跳过", extra={"reason": str(exc)})
             break
     return cards
 
